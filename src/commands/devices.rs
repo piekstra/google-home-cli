@@ -208,9 +208,15 @@ pub fn apply_change(
         .iter()
         .map(|d| d.id.as_str())
         .filter(|id| {
-            !states
-                .get(*id)
-                .is_some_and(|t| t.get("onOff").is_some() || t.get("brightness").is_some())
+            // The echo lists the traits it touched, but with empty fields
+            // (plus an acknowledgement slot), so only a trait carrying a
+            // value counts as covered.
+            !states.get(*id).is_some_and(|t| {
+                t.get("onOff").and_then(|o| o.get("onOff")).is_some()
+                    || t.get("brightness")
+                        .and_then(|b| b.get("brightness"))
+                        .is_some()
+            })
         })
         .collect();
     if !missing.is_empty() {

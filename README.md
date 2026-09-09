@@ -1,10 +1,12 @@
 # ghome — Google Home rooms and devices from the terminal
 
-`ghome` answers the question "which room does Google Home think this device
-is in?" for every device on the account, flags the ones that are misfiled,
-and gives agents a raw handle on the Home API. It exists because "turn off
-the office lights" only works when the office lights are actually in the
-Office — and nothing in the Google Home app audits that across sixty devices.
+`ghome` is Google Home from the terminal, for people and for agents. It
+reads the whole home graph (homes, rooms, devices, who owns what, what's
+online), audits and fixes where every device is filed, controls devices and
+whole rooms, and exposes the private API behind the Google Home app as a raw
+passthrough. It started because "turn off the office lights" only works
+when the office lights are actually in the Office, and nothing in the app
+audits that across a hundred devices.
 
 Conforms to [piekstra-cli spec v1](https://github.com/piekstra/cli-common)
 (`--json` everywhere, standard exit codes, keychain-only secrets).
