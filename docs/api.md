@@ -56,8 +56,8 @@ several projects through 2026) starts in a browser:
 3. `ghome auth login` exchanges it (`service=ac2dm`, GMS signing cert
    `38918a453d07199354f8b19af05ec6562ced5788`, `droidguard_results=dummy123`)
    for the master token, which it stores in the keychain (`piekstra.ghome`,
-   account = the email). Bearers are minted from it on demand and cached in
-   the keychain (`<email>/bearer`) until they expire (about an hour).
+   account = the email) together with the short-lived Bearer minted from it
+   (about an hour), as one item — one item, one permission prompt.
 
 The `androidId` sent in the exchange must be reused when minting Bearers.
 `ghome` generates one on first login and keeps it in the config file

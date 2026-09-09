@@ -1,9 +1,12 @@
-//! Credential state: the master token (keychain), the cached bearer
-//! (keychain, short-lived), and the Android id (config, not secret).
+//! Credential state: one keychain item per account holding the master
+//! token and the cached short-lived bearer, plus the Android id (config,
+//! not secret). One item, because every item a fresh binary reads is a
+//! macOS permission prompt.
 //!
 //! Keychain layout under `piekstra.ghome`:
-//!   `<email>`        → master token (`aas_et/…`)
-//!   `<email>/bearer` → `{"token": "ya29…", "expires_at": <unix secs>}`
+//!   `<email>` → `{"master": "aas_et/…", "bearer": "ya29…", "expires_at": <unix secs>}`
+//! (older installs kept the bare master token there and the bearer under
+//! `<email>/bearer`; both shapes are read and migrated on first use.)
 
 use pk_cli_core::CliError;
 use pk_cli_secrets::{CredentialStore, Secret};
@@ -23,6 +26,16 @@ const FALLBACK_TTL_SECS: u64 = 55 * 60;
 struct CachedBearer {
     token: String,
     expires_at: u64,
+}
+
+/// The single keychain item.
+#[derive(Debug, Serialize, Deserialize)]
+struct Stored {
+    master: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bearer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expires_at: Option<u64>,
 }
 
 pub struct Session {
@@ -47,20 +60,54 @@ impl Session {
     /// Load the stored credential for `email`. `Auth` (exit 3) when nothing is
     /// stored, so drivers can branch straight to `auth login`.
     pub fn load(creds: &CredentialStore, email: &str, android_id: &str) -> Result<Self, CliError> {
-        let master = creds.get(email)?.ok_or_else(|| {
+        let raw = creds.get(email)?.ok_or_else(|| {
             CliError::Auth(format!(
                 "no Google credential stored for {email}; run `ghome auth login`"
             ))
         })?;
-        let bearer = creds
-            .get(&bearer_account(email))?
-            .and_then(|s| serde_json::from_str::<CachedBearer>(s.expose()).ok());
+        let (master, bearer) = match serde_json::from_str::<Stored>(raw.expose()) {
+            Ok(st) => (
+                Secret::new(st.master),
+                match (st.bearer, st.expires_at) {
+                    (Some(token), Some(expires_at)) => Some(CachedBearer { token, expires_at }),
+                    _ => None,
+                },
+            ),
+            // Legacy layout: bare master token here, bearer in its own item.
+            // Migrate to the single item and drop the second one.
+            Err(_) => {
+                let master = Secret::new(raw.expose().to_string());
+                let bearer = creds
+                    .get(&bearer_account(email))?
+                    .and_then(|s| serde_json::from_str::<CachedBearer>(s.expose()).ok());
+                let s = Session {
+                    email: email.to_string(),
+                    android_id: android_id.to_string(),
+                    master,
+                    bearer,
+                };
+                s.persist(creds)?;
+                let _ = creds.delete(&bearer_account(email));
+                return Ok(s);
+            }
+        };
         Ok(Session {
             email: email.to_string(),
             android_id: android_id.to_string(),
             master,
             bearer,
         })
+    }
+
+    fn persist(&self, creds: &CredentialStore) -> Result<(), CliError> {
+        let st = Stored {
+            master: self.master.expose().to_string(),
+            bearer: self.bearer.as_ref().map(|b| b.token.clone()),
+            expires_at: self.bearer.as_ref().map(|b| b.expires_at),
+        };
+        let blob = serde_json::to_string(&st)
+            .map_err(|e| CliError::Other(format!("serializing credential: {e}")))?;
+        creds.set(&self.email, &Secret::new(blob))
     }
 
     /// Build a session from a freshly exchanged master token (login path).
@@ -74,7 +121,7 @@ impl Session {
     }
 
     pub fn persist_master(&self, creds: &CredentialStore) -> Result<(), CliError> {
-        creds.set(&self.email, &self.master)
+        self.persist(creds)
     }
 
     /// When the cached bearer stops being valid, if one is cached.
@@ -121,16 +168,13 @@ impl Session {
             Some(e) if e > now => e.min(cap),
             _ => cap,
         };
-        let cached = CachedBearer {
+        self.bearer = Some(CachedBearer {
             token: minted.auth.clone(),
             expires_at,
-        };
+        });
         // A failed cache write is not worth failing the command over: the
         // bearer still works for this invocation.
-        if let Ok(json) = serde_json::to_string(&cached) {
-            let _ = creds.set(&bearer_account(&self.email), &Secret::new(json));
-        }
-        self.bearer = Some(cached);
+        let _ = self.persist(creds);
         Ok(minted.auth)
     }
 
@@ -149,9 +193,17 @@ impl Session {
 
     /// Remove the cached bearer; with `forget`, the master token too.
     pub fn logout(creds: &CredentialStore, email: &str, forget: bool) -> Result<(), CliError> {
-        creds.delete(&bearer_account(email))?;
+        let _ = creds.delete(&bearer_account(email));
         if forget {
             creds.delete(email)?;
+        } else if let Some(raw) = creds.get(email)? {
+            if let Ok(mut st) = serde_json::from_str::<Stored>(raw.expose()) {
+                st.bearer = None;
+                st.expires_at = None;
+                if let Ok(blob) = serde_json::to_string(&st) {
+                    creds.set(email, &Secret::new(blob))?;
+                }
+            }
         }
         Ok(())
     }
