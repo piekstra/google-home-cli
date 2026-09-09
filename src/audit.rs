@@ -338,18 +338,21 @@ mod tests {
                 name: None,
                 room: "Office".into(),
                 source: Some("govee".into()),
+                cloud: None,
             },
             Expectation {
                 id: None,
                 name: Some("couch light".into()),
                 room: "Living Room".into(),
                 source: None,
+                cloud: None,
             },
             Expectation {
                 id: Some("ZZZ".into()),
                 name: Some("Ghost".into()),
                 room: "Attic".into(),
                 source: Some("tplink".into()),
+                cloud: None,
             },
         ];
         let f = audit(Some("Home"), &devices, &[], &rooms, &expectations);
@@ -381,12 +384,14 @@ mod tests {
                 name: Some("Island Light".into()),
                 room: "Kitchen".into(),
                 source: None,
+                cloud: None,
             },
             Expectation {
                 id: Some("H6004_BB".into()),
                 name: Some("Island Light".into()),
                 room: "Kitchen".into(),
                 source: None,
+                cloud: None,
             },
         ];
         let f = audit(None, &[&a, &b], &[], &rooms, &expectations);
