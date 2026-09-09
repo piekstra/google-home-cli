@@ -29,7 +29,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: linux deps
         # dbus dev headers for the secret-service keyring backend.
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+        run: |
+          # Ubuntu mirrors fail index downloads now and then; retry before giving up.
+          for i in 1 2 3; do sudo apt-get update && break; sleep 15; done
+          sudo apt-get install -y libdbus-1-dev pkg-config
       - name: fmt
         run: cargo fmt --all -- --check
       - name: clippy
