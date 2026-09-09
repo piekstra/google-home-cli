@@ -157,6 +157,27 @@ as nothing and reads the result back before reporting success.
 Rejected layouts, for the record (each a clean HTTP 400): instructions at
 field 1, bare-string device ids, and the assign list ahead of the space id.
 
+## Announcements — where the broadcast path stands
+
+The Home app's typed broadcast is a Home-platform trait command,
+`home.platform.traits.AssistantBroadcastTrait.BroadcastCommand{1: msg}`,
+carried by `google.internal.home.platform.mesh.interaction.v1.MeshInteractionService/SendCommands`
+on `homeplatformmesh-pa.googleapis.com` (same `homegraph` Bearer). Decoded
+envelope, positional: `[[<structure>, 2], [[[ "device@<id>" | "room@<id>" |
+"structure@<id>", [<command name>, null, null, null, [<type_url>, <base64 bytes>]] ]]]]`.
+
+Verified 2026-09-09: both `homeplatformmesh-pa.clients6.google.com/$rpc/…` and
+`homeplatformmesh-pa.googleapis.com/$rpc/…` accept the Bearer and parse that
+envelope — right up to the `Any`, which the JSON gateway rejects with
+"Invalid type URL, unknown type" because it must type-resolve the payload
+to convert JSON. Binary bodies: `clients6` answers "Request unsafe for
+trusted domain"; the plain gRPC path on `googleapis.com` is 404 over
+HTTP/1.1 (gRPC-web). Untried: native gRPC over HTTP/2 (needs an h2 client),
+and `application/x-protobuf` on the `googleapis.com` `$rpc` path.
+Alternatives: `GenAiHomeAgentService/ProcessQuery` text queries (request
+field 11, a device/surface context, is required and undecoded), or the local
+Cast protocol to each speaker with generated speech (no Google auth at all).
+
 ## Why fixing the vendor apps is not enough
 
 Every vendor's Google integration may send a `roomHint` when it SYNCs a

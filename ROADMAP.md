@@ -29,7 +29,7 @@ not built), **blocked** (needs something we don't have yet), **idea**.
 
 | Capability | Status | Notes |
 |---|---|---|
-| Announce / broadcast a message to speakers and displays | next | `home.platform.traits.AssistantBroadcastTrait.BroadcastCommand` via `MeshInteractionService/SendCommands`, or a Foyer `GenAiHomeAgentService/ProcessQuery` text query; local Cast fallback |
+| Announce / broadcast a message to speakers and displays | blocked | Command decoded (`AssistantBroadcastTrait.BroadcastCommand{msg}`) and the `MeshInteractionService/SendCommands` envelope parses on both mesh hosts, but the JSON gateway can't resolve the command's `Any` type, `clients6` refuses binary bodies ("unsafe for trusted domain"), and the plain gRPC path 404s over HTTP/1.1. Next: native gRPC over HTTP/2 to `homeplatformmesh-pa.googleapis.com`, or the local Cast route (mDNS + Cast v2 + TTS audio), or `ProcessQuery` once its surface-context slot is decoded |
 | Free-text command to the Assistant ("Ask Home") | planned | `ProcessQuery`; request shape decoded except the required surface-context slot |
 | Device on/off, brightness, colour temperature, colour | planned | `HomeControlService/UpdateTraits`; trait payloads documented by googlehome-mcp |
 | Volume / mute, media play-pause-stop | planned | `UpdateTraits` `volume` / `mediaState` |
@@ -59,6 +59,6 @@ not built), **blocked** (needs something we don't have yet), **idea**.
 | Capability | Status | Notes |
 |---|---|---|
 | Browser-handoff login, keychain credential, cached bearer | done | `auth login` |
-| Raw RPC passthrough | done | `api POST <Service>/<Method> --data '[...]'` |
+| Raw RPC passthrough | done | `api POST <Service>/<Method> --data '[...]'`; `--proto <base64>` sends serialized protobuf, `--grpc-web` frames it |
 | Public repo, releases, self-update | done | release on version bump |
 | Broadcast to one device via local Cast (no Google auth) | idea | mDNS + Cast protocol; fallback if the cloud path stays closed |

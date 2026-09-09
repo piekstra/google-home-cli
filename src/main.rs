@@ -2,6 +2,7 @@
 //! Google Home and the vendor apps behind it. Conforms to piekstra-cli/1.
 
 mod audit;
+mod b64;
 mod commands;
 mod config;
 mod foyer;
@@ -17,7 +18,6 @@ use pk_cli_config::ConfigStore;
 use pk_cli_core::dates::fmt_rfc3339;
 use pk_cli_core::info::{AuthInfo, CliInfo};
 use pk_cli_core::{output, CliError, CommonArgs};
-use pk_cli_http::ApiArgs;
 use pk_cli_secrets::{CredentialStore, Secret};
 use pk_cli_selfupdate::{SelfUpdateArgs, Updater};
 
@@ -68,7 +68,7 @@ enum Command {
     /// Compare every device's room against where it should be (room-audit/v1).
     Audit(AuditArgs),
     /// Raw Foyer RPC passthrough: `api POST <Service>/<Method> --data '[...]'`.
-    Api(ApiArgs),
+    Api(commands::api::RawArgs),
     /// Update to the latest release from GitHub.
     SelfUpdate(SelfUpdateArgs),
     /// Print a shell completion script.

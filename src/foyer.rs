@@ -103,6 +103,95 @@ impl<'a> Foyer<'a> {
         }
     }
 
+    /// Same call, but the body is already-serialized protobuf and the
+    /// response bytes come back untouched. Bypasses the JSON gateway's type
+    /// resolution, which rejects `Any` payloads whose type it doesn't know.
+    ///
+    /// `grpc_web` wraps the body in a gRPC-web frame (`application/grpc-web+proto`)
+    /// and unwraps the response: message frames are concatenated, and the
+    /// trailer frame's `grpc-status` decides success, since gRPC-web answers
+    /// HTTP 200 even for failed calls.
+    pub fn call_binary(
+        &mut self,
+        url: &str,
+        body: &[u8],
+        grpc_web: bool,
+    ) -> Result<(u16, Vec<u8>), CliError> {
+        let framed;
+        let body = if grpc_web {
+            let mut f = Vec::with_capacity(body.len() + 5);
+            f.push(0);
+            f.extend_from_slice(&(body.len() as u32).to_be_bytes());
+            f.extend_from_slice(body);
+            framed = f;
+            &framed[..]
+        } else {
+            body
+        };
+        let bearer = self.session.bearer(&self.client, self.creds)?;
+        let (status, bytes) = self.post_binary(url, body, &bearer, grpc_web)?;
+        let (status, bytes) = if status == 401 || status == 403 {
+            let bearer = self.session.refresh_bearer(&self.client, self.creds)?;
+            self.post_binary(url, body, &bearer, grpc_web)?
+        } else {
+            (status, bytes)
+        };
+        if grpc_web && (200..=299).contains(&status) {
+            return unframe_grpc_web(&bytes).map(|b| (status, b));
+        }
+        match status {
+            200..=299 => Ok((status, bytes)),
+            401 | 403 => Err(CliError::Auth(format!(
+                "foyer rejected the credential (HTTP {status}); run `ghome auth login` again"
+            ))),
+            404 => Err(CliError::NotFound(format!("HTTP 404 for {url}"))),
+            _ => Err(CliError::Upstream(format!(
+                "HTTP {status}: {}",
+                snippet(&String::from_utf8_lossy(&bytes))
+            ))),
+        }
+    }
+
+    fn post_binary(
+        &self,
+        url: &str,
+        body: &[u8],
+        bearer: &str,
+        grpc_web: bool,
+    ) -> Result<(u16, Vec<u8>), CliError> {
+        let content_type = if grpc_web {
+            "application/grpc-web+proto"
+        } else {
+            "application/x-protobuf"
+        };
+        if self.verbose {
+            eprintln!("POST {url} ({} bytes, {content_type})", body.len());
+        }
+        let mut req = self
+            .client
+            .post(url)
+            .bearer_auth(bearer)
+            .header(reqwest::header::CONTENT_TYPE, content_type)
+            .header(reqwest::header::ACCEPT, content_type)
+            .header("X-User-Agent", X_USER_AGENT);
+        if grpc_web {
+            req = req.header("X-Grpc-Web", "1");
+        }
+        let resp = req
+            .body(body.to_vec())
+            .send()
+            .map_err(|e| CliError::Upstream(format!("request: {e}")))?;
+        let status = resp.status().as_u16();
+        let bytes = resp
+            .bytes()
+            .map_err(|e| CliError::Upstream(format!("reading response: {e}")))?
+            .to_vec();
+        if self.verbose {
+            eprintln!("HTTP {status} ({} bytes)", bytes.len());
+        }
+        Ok((status, bytes))
+    }
+
     fn post(&self, url: &str, body: &Value, bearer: &str) -> Result<(u16, String), CliError> {
         if self.verbose {
             eprintln!("POST {url}");
@@ -125,6 +214,64 @@ impl<'a> Foyer<'a> {
         }
         Ok((status, text))
     }
+}
+
+/// Split a gRPC-web response into its message bytes and its trailer
+/// status. Frames are `[flags:1][len:4 BE][data]`; flag bit 0x80 marks the
+/// trailer frame, a text block of `grpc-status: N` / `grpc-message: …`.
+pub fn unframe_grpc_web(bytes: &[u8]) -> Result<Vec<u8>, CliError> {
+    let mut i = 0;
+    let mut messages = Vec::new();
+    let mut status: Option<(u32, String)> = None;
+    while i + 5 <= bytes.len() {
+        let flags = bytes[i];
+        let len =
+            u32::from_be_bytes([bytes[i + 1], bytes[i + 2], bytes[i + 3], bytes[i + 4]]) as usize;
+        let end = (i + 5 + len).min(bytes.len());
+        let data = &bytes[i + 5..end];
+        if flags & 0x80 != 0 {
+            let text = String::from_utf8_lossy(data);
+            let mut code = 0;
+            let mut msg = String::new();
+            for line in text.lines() {
+                if let Some(v) = line.strip_prefix("grpc-status:") {
+                    code = v.trim().parse().unwrap_or(2);
+                } else if let Some(v) = line.strip_prefix("grpc-message:") {
+                    msg = percent_decode(v.trim());
+                }
+            }
+            status = Some((code, msg));
+        } else {
+            messages.extend_from_slice(data);
+        }
+        i = end;
+    }
+    match status {
+        Some((0, _)) | None => Ok(messages),
+        Some((code, msg)) => Err(match code {
+            16 | 7 => CliError::Auth(format!("grpc status {code}: {msg}")),
+            5 => CliError::NotFound(format!("grpc status {code}: {msg}")),
+            _ => CliError::Upstream(format!("grpc status {code}: {msg}")),
+        }),
+    }
+}
+
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn snippet(text: &str) -> String {
@@ -151,6 +298,24 @@ mod tests {
             format!("{BASE}StructuresService/GetHomeGraph")
         );
         assert_eq!(url_for("https://x.example/y"), "https://x.example/y");
+    }
+
+    #[test]
+    fn grpc_web_frames_unwrap_and_trailers_decide() {
+        let mut ok = vec![0, 0, 0, 0, 3, 1, 2, 3];
+        let trailer = b"grpc-status: 0\r\n";
+        ok.push(0x80);
+        ok.extend_from_slice(&(trailer.len() as u32).to_be_bytes());
+        ok.extend_from_slice(trailer);
+        assert_eq!(unframe_grpc_web(&ok).unwrap(), vec![1, 2, 3]);
+        let t = b"grpc-status: 3\r\ngrpc-message: bad%20thing\r\n";
+        let mut bad = vec![0x80];
+        bad.extend_from_slice(&(t.len() as u32).to_be_bytes());
+        bad.extend_from_slice(t);
+        match unframe_grpc_web(&bad) {
+            Err(CliError::Upstream(m)) => assert!(m.contains("bad thing")),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
