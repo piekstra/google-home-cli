@@ -131,6 +131,13 @@ echoes the device with its resulting traits; an immediate `GetTraits` still
 shows the previous state for a second or so, so `ghome` prefers the echo and
 otherwise waits before reading. Verified live 2026-09-09 (on/off).
 
+## Routines — `AutomationService`
+
+`ListAutomations` `["<structure>"]` → `[[ [id, ?, manuallyRunnable(0|1),
+name, starters, actions, …], … ]]`; `ExecuteAutomation` `["<structure>",
+"<automation>", null, 2]` → `["1"]` on success. Google's own Home/Away
+appear here (ids `structure_<id>.sbr_00N`) as not manually runnable.
+
 ## Writing rooms — decoded from the app, verified live
 
 Google Home calls rooms **spaces** internally. The field numbers below were

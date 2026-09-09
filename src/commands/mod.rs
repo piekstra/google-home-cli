@@ -8,6 +8,7 @@ pub mod audit;
 pub mod devices;
 pub mod homes;
 pub mod rooms;
+pub mod routines;
 
 use pk_cli_config::ConfigStore;
 use pk_cli_core::{output, CliError};

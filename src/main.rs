@@ -24,7 +24,8 @@ use pk_cli_secrets::{CredentialStore, Secret};
 use pk_cli_selfupdate::{SelfUpdateArgs, Updater};
 
 use commands::{
-    agents::AgentsCmd, audit::AuditArgs, devices::DevicesCmd, homes::HomesCmd, rooms::RoomsCmd, Ctx,
+    agents::AgentsCmd, audit::AuditArgs, devices::DevicesCmd, homes::HomesCmd, rooms::RoomsCmd,
+    routines::RoutinesCmd, Ctx,
 };
 use config::Config;
 use session::Session;
@@ -67,6 +68,9 @@ enum Command {
     /// Partner integrations (Govee, Kasa, …) linked to the account.
     #[command(subcommand)]
     Agents(AgentsCmd),
+    /// Routines and automations: list, run.
+    #[command(subcommand)]
+    Routines(RoutinesCmd),
     /// Compare every device's room against where it should be (room-audit/v1).
     Audit(AuditArgs),
     /// Raw Foyer RPC passthrough: `api POST <Service>/<Method> --data '[...]'`.
@@ -141,7 +145,9 @@ fn run(cli: &Cli) -> Result<(), CliError> {
                     method: "browser-session".into(),
                     login_hint: Some(format!("{BIN} auth login")),
                 },
-                &["homes", "rooms", "devices", "agents", "audit", "api"],
+                &[
+                    "homes", "rooms", "devices", "agents", "routines", "audit", "api",
+                ],
             );
             output::json(&serde_json::to_value(&info).unwrap());
             return Ok(());
@@ -165,6 +171,7 @@ fn run(cli: &Cli) -> Result<(), CliError> {
         Command::Rooms(cmd) => commands::rooms::run(&ctx, cmd),
         Command::Devices(cmd) => commands::devices::run(&ctx, cmd),
         Command::Agents(cmd) => commands::agents::run(&ctx, cmd),
+        Command::Routines(cmd) => commands::routines::run(&ctx, cmd),
         Command::Audit(args) => {
             // Validate the expectations file before any credential is read.
             let expectations = commands::audit::load_expectations(args.expect.as_deref())?;

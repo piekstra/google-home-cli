@@ -53,6 +53,17 @@ pub enum RoomsCmd {
         #[arg(long)]
         force: bool,
     },
+    /// Delete an empty room (room-delete/v1). Prompts unless --force; a room
+    /// with devices in it is refused (move them out first).
+    Delete {
+        /// Room id or name.
+        room: String,
+        #[command(flatten)]
+        home: HomeFlag,
+        /// Skip the confirmation prompt (required when non-interactive).
+        #[arg(long)]
+        force: bool,
+    },
     /// Rename a room (room/v1). Prompts unless --force.
     Rename {
         /// Room id or current name.
@@ -189,6 +200,48 @@ pub fn run(ctx: &Ctx, cmd: &RoomsCmd) -> Result<(), CliError> {
                 ctx.json,
                 "room",
                 json!({"id": created.id, "name": created.name, "kind": created.kind, "home": h.name, "devices": [], "created": true}),
+            );
+            Ok(())
+        }
+        RoomsCmd::Delete { room, home, force } => {
+            require_confirmable(*force, ctx.interactive, "deleting a room")?;
+            require_layout()?;
+            let graph = ctx.graph()?;
+            let homes = ctx.homes(&graph, home.home.as_deref())?;
+            let all_rooms: Vec<&Room> = homes.iter().flat_map(|h| h.rooms.iter()).collect();
+            let r = resolve_room(&all_rooms, room)?;
+            let h = homes
+                .iter()
+                .find(|h| h.rooms.iter().any(|x| x.id == r.id))
+                .expect("room came from one of these homes");
+            if !r.device_ids.is_empty() {
+                return Err(CliError::Usage(format!(
+                    "`{}` still holds {} device(s); move them out before deleting it",
+                    r.name,
+                    r.device_ids.len()
+                )));
+            }
+            confirm(*force, &format!("Delete empty room \"{}\"?", r.name))?;
+            ctx.write(
+                spaces::SPACES,
+                spaces::DELETE_SPACE,
+                &spaces::delete_space(&h.id, &r.id),
+            )?;
+            let after = ctx.graph()?;
+            if after
+                .homes
+                .iter()
+                .flat_map(|x| x.rooms.iter())
+                .any(|x| x.id == r.id)
+            {
+                return Err(CliError::Upstream(
+                    "Google accepted the delete but the room is still listed on read-back".into(),
+                ));
+            }
+            emit_one(
+                ctx.json,
+                "room-delete",
+                json!({"id": r.id, "name": r.name, "home": h.name, "deleted": true}),
             );
             Ok(())
         }

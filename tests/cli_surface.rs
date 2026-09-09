@@ -66,6 +66,9 @@ fn every_subcommand_help_renders() {
         vec!["devices", "state", "--help"],
         vec!["devices", "set", "--help"],
         vec!["rooms", "set", "--help"],
+        vec!["rooms", "delete", "--help"],
+        vec!["routines", "list", "--help"],
+        vec!["routines", "run", "--help"],
         vec!["agents", "list", "--help"],
         vec!["audit", "--help"],
         vec!["api", "--help"],
@@ -89,7 +92,9 @@ fn info_emits_cli_info_v1() {
         .iter()
         .map(|c| c.as_str().unwrap())
         .collect();
-    for cap in ["homes", "rooms", "devices", "agents", "audit", "api"] {
+    for cap in [
+        "homes", "rooms", "devices", "agents", "routines", "audit", "api",
+    ] {
         assert!(caps.contains(&cap), "missing capability {cap}");
     }
 }
@@ -204,6 +209,8 @@ fn mutations_exit_6_when_non_interactive_without_force() {
         vec!["devices", "place", "Office Hex", "--room", "Office"],
         vec!["rooms", "create", "Loft", "--kind", "OTHER"],
         vec!["rooms", "rename", "Loft", "Attic"],
+        vec!["rooms", "delete", "Loft"],
+        vec!["routines", "run", "Good night"],
         vec!["devices", "remove", "Old Lamp"],
         vec!["devices", "rename", "Old Lamp", "Storage Old Lamp"],
     ] {

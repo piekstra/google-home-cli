@@ -17,7 +17,7 @@ not built), **blocked** (needs something we don't have yet), **idea**.
 | Move a device between rooms | done | `devices move` (`BatchModifySpacesDevices`) |
 | Add an unplaced device to the home / a room | done | `devices place` (`BatchModifyStructuresDevices`) |
 | Create / rename a room | done | `rooms create`, `rooms rename` |
-| Delete a room | planned | `SpacesService/DeleteSpace` `["<structure>","<space>"]`, decoded; needs the empty-room guard |
+| Delete a room | done | `rooms delete`, refuses non-empty rooms |
 | Rename a device (Google-side name) | done | `devices rename` (`UpdateDeviceSettings`) |
 | Remove a device from Google Home | done | `devices remove` (`DeleteDevice`); vendor re-sync may re-add it |
 | Ask every vendor to re-sync | done | `devices sync` |
@@ -41,8 +41,8 @@ not built), **blocked** (needs something we don't have yet), **idea**.
 
 | Capability | Status | Notes |
 |---|---|---|
-| List routines / automations | planned | `AutomationService/ListAutomations` `["<structure>"]` |
-| Run a routine | planned | `AutomationService/ExecuteAutomation` `["<structure>","<automation>",null,2]` |
+| List routines / automations | done | `routines list` |
+| Run a routine | done (unverified live) | `routines run`, confirms unless `--force`; response `["1"]` = started |
 | Create / edit automations | idea | `UpsertAutomation`; script format unknown |
 
 ## Vendor side (other repos, tracked here so the audit has inputs)

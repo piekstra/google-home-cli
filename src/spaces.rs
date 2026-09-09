@@ -18,6 +18,7 @@ pub const BATCH_MODIFY_STRUCTURES_DEVICES: &str = "BatchModifyStructuresDevices"
 pub const CREATE_SPACE: &str = "CreateSpace";
 pub const UPDATE_SPACE: &str = "UpdateSpace";
 pub const GET_SPACE: &str = "GetSpace";
+pub const DELETE_SPACE: &str = "DeleteSpace";
 pub const HOME_DEVICES: &str = "HomeDevicesService";
 pub const DELETE_DEVICE: &str = "DeleteDevice";
 pub const UPDATE_DEVICE_SETTINGS: &str = "UpdateDeviceSettings";
@@ -104,6 +105,11 @@ pub fn sync_devices() -> Value {
 #[allow(dead_code)]
 pub fn unlink_application(linkable_app_id: &str) -> Value {
     json!([linkable_app_id])
+}
+
+/// `DeleteSpaceRequest{ 1: structure_id, 2: space_id }`.
+pub fn delete_space(structure_id: &str, space_id: &str) -> Value {
+    json!([structure_id, space_id])
 }
 
 /// `GetSpace` request.

@@ -87,6 +87,13 @@ Control is reversible, so it doesn't prompt; the resulting state is read
 back from Google and reported. `rooms set` targets lights unless `--all`,
 so "turn off the bedroom" never cuts a plug you'd rather keep on.
 
+### Routines
+
+```console
+ghome routines list                                   # which can be run on demand
+ghome routines run "Good night"                       # prompts; --force to skip
+```
+
 ### Fixing rooms
 
 ```console
@@ -94,6 +101,7 @@ ghome devices move "Office Lamp" --room Office        # prompts; --force to skip
 ghome devices place "Office Hex" --room Office        # from `devices list --unplaced`
 ghome rooms create Storage --kind OTHER               # kinds: `rooms types`
 ghome rooms rename "Guest Bedroom" Gym
+ghome rooms delete Loft                               # only when empty
 ghome devices rename "Old Lamp" "Storage Old Lamp"   # Google-side name only
 ghome devices remove "Old Lamp"                       # vendor may re-add it on sync
 ghome devices sync                                    # ask every vendor to re-sync
