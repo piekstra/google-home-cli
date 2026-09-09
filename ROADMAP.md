@@ -51,7 +51,7 @@ not built), **blocked** (needs something we don't have yet), **idea**.
 |---|---|---|
 | Kasa rooms from the cloud (`tplc groups list`) | done | `api.tplinkra.com/v1/device-groups` with the SDK envelope, verified live; this account has no Kasa groups (its rooms are in the Tapo app) |
 | Govee rooms (`govee rooms list`) | done | private app API, email + emailed code (read from Gmail by `gro`); `rooms devices` feeds `ghome audit --expect -`, verified end to end |
-| Govee room writes (`govee rooms move|create|rename|delete`) | next | endpoints decoded from Govee Home for Android 7.6.21 (govee-cli PR #19); live verification pending a keychain grant |
+| Govee room writes (`govee rooms move|create|rename|delete`) | done (live check pending) | merged in govee-cli #19; endpoints decoded from Govee Home for Android 7.6.21; every write reads back |
 | Tapo rooms | blocked | endpoints on the NBU cloud unknown |
 | Emit `device-rooms/v1` from both for `ghome audit --expect -` | done | `tplc groups devices`, `govee rooms devices` |
 
