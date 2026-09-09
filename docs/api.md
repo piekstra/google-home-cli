@@ -204,9 +204,21 @@ registered mesh session — performs `SendCommands`. The direct `blbx`
 envelope exists in the app only for device pairing. Whatever Play services
 adds (registration, session, attestation) is not in this APK, which is why a
 bare client's otherwise-valid request fails with status 13.
-Alternatives: `GenAiHomeAgentService/ProcessQuery` text queries (request
-field 11, a device/surface context, is required and undecoded), or the local
-Cast protocol to each speaker with generated speech (no Google auth at all).
+A third pass into Play services (26.33) found the modern path: a Bearer for
+`oauth2:https://www.googleapis.com/auth/home.platform.selected.devices`
+(minted fine for the Home app identity) and an in-band handshake command,
+`home.internal.traits.OAuthSessionTrait.UpdateToken{1: token}`, sent through
+`SendCommands` before the broadcast — with no attestation anywhere. `ghome
+announce` implements exactly that (native gRPC, `src/announce.rs`). Live
+results, 2026-09-09: handshake to a bare structure id → status 3 (invalid
+argument); to `structure@<id>` → status 13 (internal error); broadcast with
+the new scope and no handshake → 13. The mesh client itself lives in Play
+services' runtime-delivered `Home.optional` native module, which is not in
+any obtainable APK, so the session semantics (whether SendCommands rides a
+long-lived stream, what the context enum means) stay unknown. Alternatives:
+`GenAiHomeAgentService/ProcessQuery` text queries (request field 11, a
+device/surface context, is required and undecoded), or the local Cast
+protocol to each speaker with generated speech (no Google auth at all).
 
 ## Why fixing the vendor apps is not enough
 

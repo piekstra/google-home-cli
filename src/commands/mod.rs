@@ -3,6 +3,7 @@
 //! `GetHomeGraph`.
 
 pub mod agents;
+pub mod announce;
 pub mod api;
 pub mod audit;
 pub mod devices;

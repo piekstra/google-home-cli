@@ -1,6 +1,7 @@
 //! `ghome` — audit and fix which room each smart device lives in, across
 //! Google Home and the vendor apps behind it. Conforms to piekstra-cli/1.
 
+mod announce;
 mod audit;
 mod b64;
 mod commands;
@@ -71,6 +72,8 @@ enum Command {
     /// Routines and automations: list, run.
     #[command(subcommand)]
     Routines(RoutinesCmd),
+    /// Speak a message on the home's speakers and displays (announce/v1).
+    Announce(commands::announce::AnnounceArgs),
     /// Compare every device's room against where it should be (room-audit/v1).
     Audit(AuditArgs),
     /// Raw Foyer RPC passthrough: `api POST <Service>/<Method> --data '[...]'`.
@@ -172,6 +175,7 @@ fn run(cli: &Cli) -> Result<(), CliError> {
         Command::Devices(cmd) => commands::devices::run(&ctx, cmd),
         Command::Agents(cmd) => commands::agents::run(&ctx, cmd),
         Command::Routines(cmd) => commands::routines::run(&ctx, cmd),
+        Command::Announce(args) => commands::announce::run(&ctx, args),
         Command::Audit(args) => {
             // Validate the expectations file before any credential is read.
             let expectations = commands::audit::load_expectations(args.expect.as_deref())?;

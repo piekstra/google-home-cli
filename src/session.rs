@@ -134,6 +134,19 @@ impl Session {
         Ok(minted.auth)
     }
 
+    /// A Bearer for a scope other than the home-graph one (not cached; the
+    /// mesh session wants `home.platform.selected.devices`).
+    pub fn bearer_for_scope(&self, client: &Client, scope: &str) -> Result<String, CliError> {
+        Ok(gpsoauth::get_auth_token(
+            client,
+            self.master.expose(),
+            &self.android_id,
+            scope,
+            &self.email,
+        )?
+        .auth)
+    }
+
     /// Remove the cached bearer; with `forget`, the master token too.
     pub fn logout(creds: &CredentialStore, email: &str, forget: bool) -> Result<(), CliError> {
         creds.delete(&bearer_account(email))?;

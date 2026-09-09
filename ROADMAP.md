@@ -29,7 +29,7 @@ not built), **blocked** (needs something we don't have yet), **idea**.
 
 | Capability | Status | Notes |
 |---|---|---|
-| Announce / broadcast a message to speakers and displays | blocked | The Home app hands `AssistantBroadcastTrait.BroadcastCommand` to Play services over AIDL; Play services holds the mesh session and makes `SendCommands`. A bare client gets gRPC 13 whatever the envelope. Routes left: local Cast (mDNS + Cast v2 + generated speech, no Google auth), `GenAiHomeAgentService/ProcessQuery` text queries (surface-context field undecoded), or decompiling the Play services home module for the session handshake |
+| Announce / broadcast a message to speakers and displays | blocked | `ghome announce` implements the Play-services recipe (mesh scope + `OAuthSessionTrait.UpdateToken` handshake + `BroadcastCommand` over native gRPC) and Google answers status 13/3; the mesh client is a runtime-delivered native module. Remaining routes: local Cast with generated speech, or `ProcessQuery` text queries |
 | Free-text command to the Assistant ("Ask Home") | planned | `ProcessQuery`; request shape decoded except the required surface-context slot |
 | Device on/off, brightness, colour temperature | done | `devices set`, `rooms set` (`UpdateTraits`); colour (hue/saturation) still planned |
 | Volume / mute, media play-pause-stop | done | `devices set --volume/--mute/--media` (`UpdateTraits`); verified on lights only so far |
