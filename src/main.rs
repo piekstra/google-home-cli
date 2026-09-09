@@ -7,6 +7,7 @@ mod commands;
 mod config;
 mod foyer;
 mod gpsoauth;
+mod grpc;
 mod homegraph;
 mod session;
 mod spaces;

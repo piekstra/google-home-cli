@@ -172,8 +172,13 @@ envelope — right up to the `Any`, which the JSON gateway rejects with
 "Invalid type URL, unknown type" because it must type-resolve the payload
 to convert JSON. Binary bodies: `clients6` answers "Request unsafe for
 trusted domain"; the plain gRPC path on `googleapis.com` is 404 over
-HTTP/1.1 (gRPC-web). Untried: native gRPC over HTTP/2 (needs an h2 client),
-and `application/x-protobuf` on the `googleapis.com` `$rpc` path.
+HTTP/1.1 (gRPC-web). Both `application/x-protobuf` on the `googleapis.com` `$rpc` path and
+native gRPC over HTTP/2 (`ghome api … --proto … --grpc`, which reads the
+trailers) get the request **accepted and executed**, and the execution fails:
+gRPC status 13 "Internal error encountered", for `device@` and `structure@`
+targets alike. So the envelope as decoded from the pairing call site is
+incomplete or the broadcast command is not runnable through this service
+from a bare client; the open question is what else the app sends.
 Alternatives: `GenAiHomeAgentService/ProcessQuery` text queries (request
 field 11, a device/surface context, is required and undecoded), or the local
 Cast protocol to each speaker with generated speech (no Google auth at all).

@@ -23,8 +23,13 @@ pub struct RawArgs {
     pub proto: Option<String>,
     /// With --proto: frame it as gRPC-web (`application/grpc-web+proto`) and
     /// unwrap the response frames; the trailer's grpc-status decides success.
-    #[arg(long, requires = "proto")]
+    #[arg(long, requires = "proto", conflicts_with = "grpc")]
     pub grpc_web: bool,
+    /// With --proto: native gRPC over HTTP/2 (`application/grpc`) at the
+    /// plain `/<package>.<Service>/<Method>` path. Trailers are not visible,
+    /// so only the body frames are reported.
+    #[arg(long, requires = "proto")]
+    pub grpc: bool,
 }
 
 pub enum Body {
@@ -57,21 +62,54 @@ pub fn validate(args: &RawArgs) -> Result<Body, CliError> {
 
 pub fn run(ctx: &Ctx, args: &RawArgs, body: Body) -> Result<(), CliError> {
     let mut session = ctx.session()?;
-    let mut client = Foyer::new(ctx.http()?, &mut session, ctx.creds, ctx.verbose);
     let url = foyer::url_for(&args.api.path);
+    if let (Body::Proto(bytes), true) = (&body, args.grpc) {
+        let bearer = session.bearer(&ctx.http()?, ctx.creds)?;
+        let ua = format!("{}/{}", crate::BIN, env!("CARGO_PKG_VERSION"));
+        if ctx.verbose {
+            eprintln!(
+                "POST {url} ({} bytes, application/grpc over h2)",
+                bytes.len()
+            );
+        }
+        let reply = crate::grpc::unary(&url, &bearer, &ua, bytes)?;
+        let mut dto = json!({
+            "schema": "api-binary/v1",
+            "status": reply.http_status,
+            "bytes": reply.messages.len(),
+            "body_base64": b64::encode(&reply.messages),
+        });
+        if let Some(code) = reply.grpc_status {
+            dto["grpc_status"] = json!(code);
+            dto["grpc_message"] = json!(reply.grpc_message);
+        }
+        output::json(&dto);
+        return Ok(());
+    }
+    let mut client = Foyer::new(ctx.http()?, &mut session, ctx.creds, ctx.verbose);
     match body {
         Body::Json(v) => {
             let out = client.call(&url, &v)?;
             output::json(&out);
         }
         Body::Proto(bytes) => {
-            let (status, out) = client.call_binary(&url, &bytes, args.grpc_web)?;
-            output::json(&json!({
+            let mode = if args.grpc_web {
+                foyer::BinaryMode::GrpcWeb
+            } else {
+                foyer::BinaryMode::Proto
+            };
+            let (status, out) = client.call_binary(&url, &bytes, mode)?;
+            let mut dto = json!({
                 "schema": "api-binary/v1",
                 "status": status,
                 "bytes": out.len(),
                 "body_base64": b64::encode(&out),
-            }));
+            });
+            if let Some((code, msg)) = client.last_grpc_status() {
+                dto["grpc_status"] = json!(code);
+                dto["grpc_message"] = json!(msg);
+            }
+            output::json(&dto);
         }
     }
     Ok(())

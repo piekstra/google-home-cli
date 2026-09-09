@@ -48,11 +48,20 @@ pub fn strip_xssi(body: &str) -> &str {
     }
 }
 
+/// How a binary body is carried on the HTTP/1.1 gateway: plain protobuf on
+/// the `$rpc` path, or gRPC-web framing. Native gRPC lives in `crate::grpc`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinaryMode {
+    Proto,
+    GrpcWeb,
+}
+
 pub struct Foyer<'a> {
     client: Client,
     session: &'a mut Session,
     creds: &'a CredentialStore,
     verbose: bool,
+    last_grpc_status: Option<(i32, String)>,
 }
 
 impl<'a> Foyer<'a> {
@@ -67,6 +76,7 @@ impl<'a> Foyer<'a> {
             session,
             creds,
             verbose,
+            last_grpc_status: None,
         }
     }
 
@@ -111,12 +121,19 @@ impl<'a> Foyer<'a> {
     /// and unwraps the response: message frames are concatenated, and the
     /// trailer frame's `grpc-status` decides success, since gRPC-web answers
     /// HTTP 200 even for failed calls.
+    /// gRPC status carried in response headers (a "trailers-only" reply) on
+    /// the last binary call, if the server sent one.
+    pub fn last_grpc_status(&self) -> Option<(i32, String)> {
+        self.last_grpc_status.clone()
+    }
+
     pub fn call_binary(
         &mut self,
         url: &str,
         body: &[u8],
-        grpc_web: bool,
+        mode: BinaryMode,
     ) -> Result<(u16, Vec<u8>), CliError> {
+        let grpc_web = mode != BinaryMode::Proto;
         let framed;
         let body = if grpc_web {
             let mut f = Vec::with_capacity(body.len() + 5);
@@ -129,10 +146,10 @@ impl<'a> Foyer<'a> {
             body
         };
         let bearer = self.session.bearer(&self.client, self.creds)?;
-        let (status, bytes) = self.post_binary(url, body, &bearer, grpc_web)?;
+        let (status, bytes) = self.post_binary(url, body, &bearer, mode)?;
         let (status, bytes) = if status == 401 || status == 403 {
             let bearer = self.session.refresh_bearer(&self.client, self.creds)?;
-            self.post_binary(url, body, &bearer, grpc_web)?
+            self.post_binary(url, body, &bearer, mode)?
         } else {
             (status, bytes)
         };
@@ -153,16 +170,15 @@ impl<'a> Foyer<'a> {
     }
 
     fn post_binary(
-        &self,
+        &mut self,
         url: &str,
         body: &[u8],
         bearer: &str,
-        grpc_web: bool,
+        mode: BinaryMode,
     ) -> Result<(u16, Vec<u8>), CliError> {
-        let content_type = if grpc_web {
-            "application/grpc-web+proto"
-        } else {
-            "application/x-protobuf"
+        let content_type = match mode {
+            BinaryMode::Proto => "application/x-protobuf",
+            BinaryMode::GrpcWeb => "application/grpc-web+proto",
         };
         if self.verbose {
             eprintln!("POST {url} ({} bytes, {content_type})", body.len());
@@ -174,14 +190,34 @@ impl<'a> Foyer<'a> {
             .header(reqwest::header::CONTENT_TYPE, content_type)
             .header(reqwest::header::ACCEPT, content_type)
             .header("X-User-Agent", X_USER_AGENT);
-        if grpc_web {
-            req = req.header("X-Grpc-Web", "1");
+        match mode {
+            BinaryMode::GrpcWeb => req = req.header("X-Grpc-Web", "1"),
+            BinaryMode::Proto => {}
         }
         let resp = req
             .body(body.to_vec())
             .send()
             .map_err(|e| CliError::Upstream(format!("request: {e}")))?;
         let status = resp.status().as_u16();
+        let hdr = |name: &str| {
+            resp.headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
+        };
+        self.last_grpc_status = hdr("grpc-status").and_then(|c| {
+            c.trim().parse::<i32>().ok().map(|code| {
+                (
+                    code,
+                    percent_decode(&hdr("grpc-message").unwrap_or_default()),
+                )
+            })
+        });
+        if self.verbose {
+            if let Some((code, msg)) = &self.last_grpc_status {
+                eprintln!("grpc-status {code}: {msg}");
+            }
+        }
         let bytes = resp
             .bytes()
             .map_err(|e| CliError::Upstream(format!("reading response: {e}")))?
