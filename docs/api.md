@@ -195,9 +195,15 @@ HTTP/1.1 (gRPC-web). Both `application/x-protobuf` on the `googleapis.com` `$rpc
 native gRPC over HTTP/2 (`ghome api … --proto … --grpc`, which reads the
 trailers) get the request **accepted and executed**, and the execution fails:
 gRPC status 13 "Internal error encountered", for `device@` and `structure@`
-targets alike. So the envelope as decoded from the pairing call site is
-incomplete or the broadcast command is not runnable through this service
-from a bare client; the open question is what else the app sends.
+targets alike. The second decompile pass settled it: the app never sends broadcasts over
+the network itself. The composer builds the trait command and hands it to
+**Google Play services** (`com.google.android.gms.home.interaction`, over
+AIDL, as `bnrt{1: [{1: objectId, 2: {1: name, 5: Any}, 3: false}]}` with a
+request context of UUID + timestamp), and Play services — holding its own
+registered mesh session — performs `SendCommands`. The direct `blbx`
+envelope exists in the app only for device pairing. Whatever Play services
+adds (registration, session, attestation) is not in this APK, which is why a
+bare client's otherwise-valid request fails with status 13.
 Alternatives: `GenAiHomeAgentService/ProcessQuery` text queries (request
 field 11, a device/surface context, is required and undecoded), or the local
 Cast protocol to each speaker with generated speech (no Google auth at all).
