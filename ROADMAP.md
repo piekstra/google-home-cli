@@ -19,7 +19,7 @@ not built), **blocked** (needs something we don't have yet), **idea**.
 | Create / rename a room | done | `rooms create`, `rooms rename` |
 | Delete a room | done | `rooms delete`, refuses non-empty rooms |
 | Rename a device (Google-side name) | done | `devices rename` (`UpdateDeviceSettings`) |
-| Remove a device from Google Home | done | `devices remove` (`DeleteDevice`); vendor re-sync may re-add it |
+| Remove a device from Google Home | done | `devices remove` (`DeleteDevice`); confirmed: a vendor re-sync (`devices sync`) brings a still-listed device back as unplaced, so delete it at the vendor too |
 | Ask every vendor to re-sync | done | `devices sync` |
 | Unlink a vendor integration | blocked | `SetupService/UnlinkApplication` decoded, but its "linkable app id" is not the agent id and no read exposes it yet |
 | Apply an audit's expectations in one go | idea | `audit --apply` = one `devices move`/`place` per mismatch, confirmed once |
@@ -50,7 +50,7 @@ not built), **blocked** (needs something we don't have yet), **idea**.
 | Capability | Status | Notes |
 |---|---|---|
 | Kasa rooms from the cloud (`tplc groups list`) | done | `api.tplinkra.com/v1/device-groups` with the SDK envelope, verified live; this account has no Kasa groups (its rooms are in the Tapo app) |
-| Govee rooms (`govee rooms list`) | done (login pending code) | private app API, email + emailed code; `rooms devices` emits `device-rooms/v1` |
+| Govee rooms (`govee rooms list`) | done | private app API, email + emailed code (read from Gmail by `gro`); `rooms devices` feeds `ghome audit --expect -`, verified end to end |
 | Tapo rooms | blocked | endpoints on the NBU cloud unknown |
 | Emit `device-rooms/v1` from both for `ghome audit --expect -` | done | `tplc groups devices`, `govee rooms devices` |
 

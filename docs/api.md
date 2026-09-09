@@ -166,7 +166,7 @@ Device-level writes, decoded the same way and verified live on 2026-09-09:
 |---|---|---|
 | `HomeDevicesService/DeleteDevice` | `[null, ["<dev>"]]` (field 1 absent) | the app's "Remove device"; a vendor that still lists the device re-adds it as unplaced on its next sync |
 | `HomeDevicesService/UpdateDeviceSettings` | `[["<dev>"], [[["<name>"]]], [["basic_settings.name"]]]` | rename (Google-side name); returns `[null, device]` |
-| `HomeDevicesService/SyncDevices` | `[]` | "sync my devices" |
+| `HomeDevicesService/SyncDevices` | `[]` | "sync my devices"; observed 2026-09-09: every device a vendor still lists that had been removed with `DeleteDevice` came back as unplaced |
 | `SetupService/UnlinkApplication` | `["<linkable app id>"]` | decoded but **not usable yet**: the id is not the agent id (rejected 400) and `GetLinkableApplications` returns only media apps |
 | `HomeControlService/GetTraits` | see above | online state |
 
