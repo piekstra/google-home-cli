@@ -1,0 +1,42 @@
+[
+  1700000000,
+  [
+    [
+      "home-1",
+      "Example Home",
+      ["1 Example St", [0.0, 0.0], null, null, 0, "America/New_York"],
+      [["owner@example.com"], ["partner@example.com"]],
+      null,
+      [
+        ["room-office", null, "Office", ["OFFICE"], [[["dev-1", ["agent-a", "P1"]]], [["dev-4", ["agent-b", "P4"]]]]],
+        ["room-living", null, "Living Room", ["LIVING_ROOM"], [[["dev-2", ["agent-a", "P2"]]], [["dev-3", ["agent-b", "P3"]]]]],
+        ["room-garage", null, "Garage", ["GARAGE"], null]
+      ],
+      [
+        [["dev-1", ["agent-a", "P1"]], null, null, "Office Lamp", null, "action.devices.types.LIGHT",
+         ["action.devices.traits.OnOff", "action.devices.traits.Brightness", "action.devices.traits.ColorSetting"],
+         null, null, null, null, null, null, null, null, null, [null, "H6076"], [null, "Office Lamp"], 0, null, null,
+         null, null, null, null, [["owner@example.com"]]],
+        [["dev-2", ["agent-a", "P2"]], null, null, "Office Panels", null, "action.devices.types.LIGHT",
+         ["action.devices.traits.OnOff", "action.devices.traits.Brightness"],
+         null, null, null, null, null, null, null, null, null, [null, "H6076"], [null, "Office Panels"], 0, null, null],
+        [["dev-3", ["agent-b", "P3"]], null, null, "Couch Plug", null, "action.devices.types.OUTLET",
+         ["action.devices.traits.OnOff"],
+         null, null, null, null, null, null, null, null, null, [null, "KP115"], [null, "Couch Plug"], 0, null, ["action.devices.types.LIGHT"]],
+        [["dev-4", ["agent-b", "P4"]], null, null, "Desk Strip", null, "action.devices.types.LIGHT",
+         ["action.devices.traits.OnOff", "action.devices.traits.Brightness", "action.devices.traits.ColorSetting"],
+         null, null, null, null, null, null, null, null, null, [null, "KL430"], [null, "Desk Strip"], 0, null, null],
+        [["dev-5", ["agent-b", "P5"]], null, null, "Garage Heater", null, "action.devices.types.OUTLET",
+         ["action.devices.traits.OnOff"],
+         null, null, null, null, null, null, null, null, null, [null, "HS103"], [null, "Garage Heater"], 0, null, null]
+      ]
+    ]
+  ],
+  null,
+  [["OFFICE", "Office"], ["LIVING_ROOM", "Living Room"], ["GARAGE", "Garage"], ["OTHER", "Other"]],
+  null,
+  null,
+  [["LIGHT", "Light"], ["OUTLET", "Outlet"]],
+  null,
+  [["agent-a", "Acme Lights"], ["agent-b", "Acme Plugs"]]
+]

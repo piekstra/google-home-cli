@@ -1,0 +1,7 @@
+/target
+*.log
+.env
+.env.*
+# raw (unscrubbed) API captures never belong in git — see tests/fixtures/README.md
+/captures/
+.DS_Store

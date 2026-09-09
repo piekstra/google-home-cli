@@ -1,0 +1,38 @@
+[package]
+name = "google-home-cli"
+version = "0.3.1"
+edition = "2021"
+rust-version = "1.85"
+description = "Audit and fix which room each smart device lives in, across Google Home and the vendor apps behind it (Govee, TP-Link Kasa/Tapo). Keychain-secured, agent-friendly."
+license = "MIT"
+repository = "https://github.com/piekstra/google-home-cli"
+homepage = "https://github.com/piekstra/google-home-cli"
+readme = "README.md"
+keywords = ["google-home", "smart-home", "govee", "tplink", "cli"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "ghome"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+pk-cli-core = { git = "https://github.com/piekstra/cli-common", tag = "v0.7.0", features = ["reqwest"] }
+pk-cli-secrets = { git = "https://github.com/piekstra/cli-common", tag = "v0.7.0" }
+pk-cli-config = { git = "https://github.com/piekstra/cli-common", tag = "v0.7.0" }
+pk-cli-selfupdate = { git = "https://github.com/piekstra/cli-common", tag = "v0.7.0" }
+pk-cli-auth = { git = "https://github.com/piekstra/cli-common", tag = "v0.7.0" }
+pk-cli-http = { git = "https://github.com/piekstra/cli-common", tag = "v0.7.0" }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "cookies", "rustls-tls"] }
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+
+[profile.release]
+strip = true
+lto = true
+opt-level = "z"
