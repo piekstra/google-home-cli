@@ -102,6 +102,22 @@ impl<'a> Ctx<'a> {
         Ok(out)
     }
 
+    /// Full trait state for `ids` (`{id: {trait: {field: value}}}`), batched.
+    pub fn states(&self, ids: &[&str]) -> Result<serde_json::Map<String, Value>, CliError> {
+        let mut session = self.session()?;
+        let mut foyer = Foyer::new(self.http()?, &mut session, self.creds, self.verbose);
+        let mut out = serde_json::Map::new();
+        for chunk in ids.chunks(60) {
+            let raw = foyer.rpc(
+                crate::traits::SERVICE,
+                crate::traits::GET_TRAITS,
+                &crate::traits::get_traits(chunk),
+            )?;
+            out.extend(crate::traits::parse_states(&raw));
+        }
+        Ok(out)
+    }
+
     /// Homes to act on: `--home` if given, else the configured default, else all.
     pub fn homes<'g>(
         &self,

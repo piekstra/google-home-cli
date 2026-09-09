@@ -11,6 +11,7 @@ mod grpc;
 mod homegraph;
 mod session;
 mod spaces;
+mod traits;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;

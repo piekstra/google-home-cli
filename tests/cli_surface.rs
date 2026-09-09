@@ -63,6 +63,9 @@ fn every_subcommand_help_renders() {
         vec!["devices", "remove", "--help"],
         vec!["devices", "rename", "--help"],
         vec!["devices", "sync", "--help"],
+        vec!["devices", "state", "--help"],
+        vec!["devices", "set", "--help"],
+        vec!["rooms", "set", "--help"],
         vec!["agents", "list", "--help"],
         vec!["audit", "--help"],
         vec!["api", "--help"],
@@ -218,6 +221,32 @@ fn mutations_exit_6_when_non_interactive_without_force() {
         .args(["--json", "rooms", "create", "Loft", "--kind", "not a code!"])
         .assert()
         .code(2);
+}
+
+#[test]
+fn control_validates_its_arguments_before_any_credential() {
+    // No change requested, or out-of-range values, are usage errors (2).
+    ghome()
+        .args(["--json", "devices", "set", "Lamp"])
+        .assert()
+        .code(2);
+    ghome()
+        .args(["--json", "devices", "set", "Lamp", "--brightness", "150"])
+        .assert()
+        .code(2);
+    ghome()
+        .args(["--json", "devices", "set", "Lamp", "--on", "--off"])
+        .assert()
+        .code(2);
+    ghome()
+        .args(["--json", "rooms", "set", "Office", "--media", "rewind"])
+        .assert()
+        .code(2);
+    // A valid change with no account stops at auth (3), before the network.
+    ghome()
+        .args(["--json", "rooms", "set", "Office", "--off"])
+        .assert()
+        .code(3);
 }
 
 #[test]

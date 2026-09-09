@@ -1,5 +1,5 @@
 use clap::{Args, Subcommand};
-use pk_cli_core::CliError;
+use pk_cli_core::{output, CliError};
 use serde_json::{json, Value};
 
 use super::{confirm, device_row, emit_list, emit_one, require_confirmable, require_layout, Ctx};
@@ -27,6 +27,19 @@ pub enum RoomsCmd {
     },
     /// Google's room categories, for naming new rooms (room-type-list/v1).
     Types,
+    /// Control every light in a room at once (room-set/v1): "turn off the
+    /// office lights". Add --all to include plugs, switches and speakers.
+    Set {
+        /// Room id or name.
+        room: String,
+        #[command(flatten)]
+        change: super::devices::ChangeArgs,
+        /// Include every device that supports the change, not just lights.
+        #[arg(long)]
+        all: bool,
+        #[command(flatten)]
+        home: HomeFlag,
+    },
     /// Create a room (room/v1). Prompts unless --force.
     Create {
         /// Display name, e.g. "Loft".
@@ -221,6 +234,67 @@ pub fn run(ctx: &Ctx, cmd: &RoomsCmd) -> Result<(), CliError> {
                         .into(),
                 )),
             }
+        }
+        RoomsCmd::Set {
+            room,
+            change,
+            all,
+            home,
+        } => {
+            let change = change.to_change()?;
+            let graph = ctx.graph()?;
+            let homes = ctx.homes(&graph, home.home.as_deref())?;
+            let all_rooms: Vec<&Room> = homes.iter().flat_map(|h| h.rooms.iter()).collect();
+            let r = resolve_room(&all_rooms, room)?;
+            let h = homes
+                .iter()
+                .find(|h| h.rooms.iter().any(|x| x.id == r.id))
+                .expect("room came from one of these homes");
+            let targets: Vec<&crate::homegraph::Device> = h
+                .devices
+                .iter()
+                .filter(|d| r.device_ids.contains(&d.id))
+                .filter(|d| {
+                    *all || d
+                        .assigned_kind
+                        .as_deref()
+                        .or(d.kind.as_deref())
+                        .is_some_and(|k| k.ends_with(".LIGHT"))
+                })
+                .filter(|d| crate::traits::supports(d, &change))
+                .collect();
+            if targets.is_empty() {
+                return Err(CliError::NotFound(format!(
+                    "no {} in {} support that change",
+                    if *all {
+                        "devices"
+                    } else {
+                        "lights (try --all)"
+                    },
+                    r.name
+                )));
+            }
+            let items = super::devices::apply_change(ctx, &targets, &change)?;
+            output::emit(
+                ctx.json,
+                "room-set",
+                json!({"room": r.name, "requested": change.describe(), "items": items}),
+                |v| {
+                    let rows = output::rows_of(v, "items");
+                    output::table(&output::table_view(
+                        &rows,
+                        &[
+                            "name",
+                            "online",
+                            "on",
+                            "brightness",
+                            "color_temperature_k",
+                            "volume",
+                        ],
+                    ));
+                },
+            );
+            Ok(())
         }
         RoomsCmd::Types => {
             let graph = ctx.graph()?;

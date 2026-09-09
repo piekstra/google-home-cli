@@ -70,6 +70,21 @@ Every command takes `--json` and emits one schema-tagged DTO
 (`home-list/v1`, `room/v1`, `device-list/v1`, …). Multi-home accounts
 narrow with `--home <ID|NAME>` or `ghome config set home <NAME>`.
 
+### Controlling devices
+
+```console
+ghome devices state "Office Hex"                      # online, on, brightness, colour temp, raw traits
+ghome devices set "Office Hex" --off
+ghome devices set "Office Hex" --on --brightness 40 --temp 2700
+ghome devices set "Kitchen display" --volume 20 --media pause
+ghome rooms set Office --off                          # every light in the room
+ghome rooms set Office --on --all                     # plugs, switches and speakers too
+```
+
+Control is reversible, so it doesn't prompt; the resulting state is read
+back from Google and reported. `rooms set` targets lights unless `--all`,
+so "turn off the bedroom" never cuts a plug you'd rather keep on.
+
 ### Fixing rooms
 
 ```console

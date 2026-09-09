@@ -91,6 +91,24 @@ pub enum DevicesCmd {
     },
     /// Ask Google to re-sync every linked vendor ("sync my devices").
     Sync,
+    /// Current state: online, on/off, brightness, colour temperature, volume,
+    /// playback, plus every raw trait (device-state/v1).
+    State {
+        /// Device id, exact name, or unique partial name.
+        device: String,
+        #[command(flatten)]
+        home: HomeFlag,
+    },
+    /// Control a device (device-set/v1). Reversible, so no prompt; the new
+    /// state is read back and reported.
+    Set {
+        /// Device id, exact name, or unique partial name.
+        device: String,
+        #[command(flatten)]
+        change: ChangeArgs,
+        #[command(flatten)]
+        home: HomeFlag,
+    },
     /// Add a device that is linked to the account but in no home to the
     /// home, optionally straight into a room (device-place/v1).
     Place {
@@ -105,6 +123,112 @@ pub enum DevicesCmd {
         #[arg(long)]
         force: bool,
     },
+}
+
+/// The state changes `devices set` / `rooms set` accept.
+#[derive(Args, Debug, Clone, Default)]
+pub struct ChangeArgs {
+    /// Turn on.
+    #[arg(long, conflicts_with = "off")]
+    pub on: bool,
+    /// Turn off.
+    #[arg(long)]
+    pub off: bool,
+    /// Brightness 0–100 (turns the device on).
+    #[arg(long, value_name = "PCT", value_parser = clap::value_parser!(u8).range(0..=100))]
+    pub brightness: Option<u8>,
+    /// Colour temperature in kelvin, e.g. 2700 (warm) to 6500 (cool).
+    #[arg(long, value_name = "KELVIN", value_parser = clap::value_parser!(u32).range(1000..=10000))]
+    pub temp: Option<u32>,
+    /// Volume 0–100.
+    #[arg(long, value_name = "PCT", value_parser = clap::value_parser!(u8).range(0..=100))]
+    pub volume: Option<u8>,
+    /// Mute / unmute.
+    #[arg(long, conflicts_with = "unmute")]
+    pub mute: bool,
+    #[arg(long)]
+    pub unmute: bool,
+    /// Media: play, pause, or stop.
+    #[arg(long, value_name = "ACTION", value_parser = ["play", "pause", "stop"])]
+    pub media: Option<String>,
+}
+
+impl ChangeArgs {
+    pub fn to_change(&self) -> Result<crate::traits::Change, CliError> {
+        let playback = self.media.as_deref().map(|m| match m {
+            "play" => "playing",
+            "pause" => "paused",
+            _ => "stopped",
+        });
+        let c = crate::traits::Change {
+            on: if self.on {
+                Some(true)
+            } else if self.off {
+                Some(false)
+            } else {
+                None
+            },
+            brightness: self.brightness,
+            color_temperature_k: self.temp,
+            volume: self.volume,
+            muted: if self.mute {
+                Some(true)
+            } else if self.unmute {
+                Some(false)
+            } else {
+                None
+            },
+            playback: playback.map(str::to_string),
+        };
+        if c.is_empty() {
+            return Err(CliError::Usage(
+                "nothing to change: pass --on/--off, --brightness, --temp, --volume, --mute/--unmute or --media".into(),
+            ));
+        }
+        Ok(c)
+    }
+}
+
+/// Apply one change to a set of devices and read the result back.
+pub fn apply_change(
+    ctx: &Ctx,
+    devices: &[&Device],
+    change: &crate::traits::Change,
+) -> Result<Vec<Value>, CliError> {
+    // The write's own response echoes the resulting traits; when it doesn't
+    // cover a device, a fresh read after a short pause does — an immediate
+    // read still shows the previous state.
+    let echo = ctx.write(
+        crate::traits::SERVICE,
+        crate::traits::UPDATE_TRAITS,
+        &crate::traits::update_traits(devices, change),
+    )?;
+    let mut states = crate::traits::parse_states(&echo);
+    let missing: Vec<&str> = devices
+        .iter()
+        .map(|d| d.id.as_str())
+        .filter(|id| {
+            !states
+                .get(*id)
+                .is_some_and(|t| t.get("onOff").is_some() || t.get("brightness").is_some())
+        })
+        .collect();
+    if !missing.is_empty() {
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        states.extend(ctx.states(&missing)?);
+    }
+    Ok(devices
+        .iter()
+        .map(|d| {
+            let t = states.get(&d.id).cloned().unwrap_or(json!({}));
+            let mut s = crate::traits::summarize(&d.id, &d.name, &t);
+            if let Value::Object(m) = &mut s {
+                m.remove("traits");
+                m.insert("room".into(), json!(d.room));
+            }
+            s
+        })
+        .collect())
 }
 
 /// The home a device belongs to, from the set the command is acting on.
@@ -419,6 +543,49 @@ pub fn run(ctx: &Ctx, cmd: &DevicesCmd) -> Result<(), CliError> {
                 "device-rename",
                 json!({"device_id": d.id, "previous_name": d.name, "name": name, "changed": true}),
             );
+            Ok(())
+        }
+        DevicesCmd::State { device, home } => {
+            let graph = ctx.graph()?;
+            let homes = ctx.homes(&graph, home.home.as_deref())?;
+            let all: Vec<&Device> = homes.iter().flat_map(|h| h.devices.iter()).collect();
+            let d = resolve_device(&all, device)?;
+            let states = ctx.states(&[&d.id])?;
+            let t = states.get(&d.id).cloned().unwrap_or(json!({}));
+            let mut s = crate::traits::summarize(&d.id, &d.name, &t);
+            if let Value::Object(m) = &mut s {
+                m.insert("room".into(), json!(d.room));
+            }
+            emit_one(ctx.json, "device-state", s);
+            Ok(())
+        }
+        DevicesCmd::Set {
+            device,
+            change,
+            home,
+        } => {
+            let change = change.to_change()?;
+            let graph = ctx.graph()?;
+            let homes = ctx.homes(&graph, home.home.as_deref())?;
+            let all: Vec<&Device> = homes.iter().flat_map(|h| h.devices.iter()).collect();
+            let d = resolve_device(&all, device)?;
+            if !crate::traits::supports(d, &change) {
+                return Err(CliError::Usage(format!(
+                    "`{}` does not support that change (traits: {})",
+                    d.name,
+                    d.traits
+                        .iter()
+                        .map(|t| t.rsplit('.').next().unwrap_or(t))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+            }
+            let mut results = apply_change(ctx, &[d], &change)?;
+            let mut s = results.pop().unwrap_or(json!({}));
+            if let Value::Object(m) = &mut s {
+                m.insert("requested".into(), json!(change.describe()));
+            }
+            emit_one(ctx.json, "device-set", s);
             Ok(())
         }
         DevicesCmd::Sync => {

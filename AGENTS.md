@@ -59,6 +59,10 @@ Run `make verify` before considering a change done — it's exactly what CI runs
   create|rename` prompt unless `--force`, exit 6 non-interactively *before*
   any network call, and verify with `GetSpace`/`GetHomeGraph` before reporting
   success — Foyer's write responses are empty, so a 2xx proves nothing.
+- **Control doesn't prompt; structure does.** `devices set` / `rooms set`
+  are reversible state changes and run without confirmation (they still
+  read back). Moves, renames, removes and room creation confirm or need
+  `--force`.
 - **No guessing field numbers against a real home.** Layouts live in
   `src/spaces.rs` with the decoded field numbers in doc comments; a new write
   RPC gets its layout from the app's descriptors (docs/api.md), not from

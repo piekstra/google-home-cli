@@ -119,6 +119,18 @@ what the partner last reported, so a device from a previous home that the
 vendor still lists shows `0` here while still sitting in a room. Batched 60
 ids per call; the web app sends all ids in one go.
 
+## Control — `HomeControlService/UpdateTraits`
+
+Body `[[ [ [id, [agentId, partnerId]], [ [trait, [[field, wrapper], …]], … ] ], … ]]`,
+one entry per device, several traits per entry. Wrappers: int `[null, n]`,
+string `[null, null, "s"]`, bool `[null, null, null, 0|1]`. Traits and fields
+used: `onOff.onOff` (bool), `brightness.brightness` (int 0–100),
+`color.colorTemperature` (int kelvin), `volume.currentVolume` / `isMuted`,
+`mediaState.playbackState` (`playing`/`paused`/`stopped`). The response
+echoes the device with its resulting traits; an immediate `GetTraits` still
+shows the previous state for a second or so, so `ghome` prefers the echo and
+otherwise waits before reading. Verified live 2026-09-09 (on/off).
+
 ## Writing rooms — decoded from the app, verified live
 
 Google Home calls rooms **spaces** internally. The field numbers below were
