@@ -21,7 +21,7 @@ not built), **blocked** (needs something we don't have yet), **idea**.
 | Rename a device (Google-side name) | done | `devices rename` (`UpdateDeviceSettings`) |
 | Remove a device from Google Home | done | `devices remove` (`DeleteDevice`); confirmed: a vendor re-sync (`devices sync`) brings a still-listed device back as unplaced, so delete it at the vendor too |
 | Ask every vendor to re-sync | done | `devices sync` |
-| Unlink a vendor integration | blocked | `SetupService/UnlinkApplication` decoded, but its "linkable app id" is not the agent id and no read exposes it yet |
+| Unlink a vendor integration | blocked | `SetupService/UnlinkApplication` decoded, but its "linkable app id" is not the agent id and no read exposes it yet. Unlinking in the Home app works and is what finally removes a vendor's dead devices (verified: Tuya and Yale gone after unlink + `devices sync`) |
 | Apply an audit's expectations in one go | idea | `audit --apply` = one `devices move`/`place` per mismatch, confirmed once |
 | Rename the home, home address | idea | `StructuresService/UpdateStructure(V2)`; layout not decoded |
 
