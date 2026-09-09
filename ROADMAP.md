@@ -49,10 +49,10 @@ not built), **blocked** (needs something we don't have yet), **idea**.
 
 | Capability | Status | Notes |
 |---|---|---|
-| Kasa rooms from the cloud (`tplc rooms list`) | planned | `listDeviceGroups` / `updateDeviceGroup`, group type `room`, from the Kasa APK; unverified live |
-| Govee rooms (`govee rooms list`) | planned | private app API (`app2.govee.com`, email 2FA); `groupId` + `groups[]` |
+| Kasa rooms from the cloud (`tplc groups list`) | done | `api.tplinkra.com/v1/device-groups` with the SDK envelope, verified live; this account has no Kasa groups (its rooms are in the Tapo app) |
+| Govee rooms (`govee rooms list`) | done (login pending code) | private app API, email + emailed code; `rooms devices` emits `device-rooms/v1` |
 | Tapo rooms | blocked | endpoints on the NBU cloud unknown |
-| Emit `device-rooms/v1` from both for `ghome audit --expect -` | planned | contract defined in README |
+| Emit `device-rooms/v1` from both for `ghome audit --expect -` | done | `tplc groups devices`, `govee rooms devices` |
 
 ## Platform
 
