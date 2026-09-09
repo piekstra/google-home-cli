@@ -89,7 +89,7 @@ pub fn run(ctx: &Ctx, args: &AuditArgs, expectations: Vec<Expectation>) -> Resul
     let summary = audit::summarize(&findings);
     let shown: Vec<Value> = findings
         .iter()
-        .filter(|f| !args.problems || f.status != Status::Ok)
+        .filter(|f| !args.problems || !matches!(f.status, Status::Ok | Status::LocalOnly))
         .map(|f| serde_json::to_value(f).unwrap_or(Value::Null))
         .collect();
     let payload = json!({
@@ -107,8 +107,13 @@ pub fn run(ctx: &Ctx, args: &AuditArgs, expectations: Vec<Expectation>) -> Resul
             ));
         }
         eprintln!(
-            "ok {} · mismatch {} · unassigned {} · unplaced {} · unmatched {}",
-            summary.ok, summary.mismatch, summary.unassigned, summary.unplaced, summary.unmatched
+            "ok {} · mismatch {} · unassigned {} · unplaced {} · unmatched {} · local-only {}",
+            summary.ok,
+            summary.mismatch,
+            summary.unassigned,
+            summary.unplaced,
+            summary.unmatched,
+            summary.local_only
         );
     });
     Ok(())

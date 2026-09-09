@@ -29,6 +29,11 @@ pub struct Expectation {
     /// Which vendor reported it (`govee`, `tplink`, …); free text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// Whether the vendor can reach the device from its cloud. `false`
+    /// (Bluetooth-only) means Google Home can never see it, so a missing
+    /// match is expected rather than a problem.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -42,6 +47,9 @@ pub enum Status {
     Unassigned,
     /// An expectation that matched no Google Home device.
     Unmatched,
+    /// An expectation for a device the vendor can't expose to Google Home
+    /// (Bluetooth-only); informational.
+    LocalOnly,
     /// Linked to the account but placed in no home, so no room can hold it
     /// until it is added to the home.
     Unplaced,
@@ -74,6 +82,7 @@ pub struct Summary {
     pub unassigned: usize,
     pub unplaced: usize,
     pub unmatched: usize,
+    pub local_only: usize,
 }
 
 /// Parse a `device-rooms/v1` document (or a bare array of expectations).
@@ -219,7 +228,11 @@ pub fn audit(
     for (e, was_used) in expectations.iter().zip(used) {
         if !was_used {
             findings.push(Finding {
-                status: Status::Unmatched,
+                status: if e.cloud == Some(false) {
+                    Status::LocalOnly
+                } else {
+                    Status::Unmatched
+                },
                 device_id: None,
                 name: e.name.clone().or_else(|| e.id.clone()).unwrap_or_default(),
                 room: None,
@@ -242,6 +255,7 @@ pub fn summarize(findings: &[Finding]) -> Summary {
             Status::Unassigned => s.unassigned += 1,
             Status::Unplaced => s.unplaced += 1,
             Status::Unmatched => s.unmatched += 1,
+            Status::LocalOnly => s.local_only += 1,
         }
     }
     s
@@ -400,6 +414,26 @@ mod tests {
         assert_eq!(f[0].status, Status::Unplaced);
         assert_eq!(f[0].expected_room.as_deref(), Some("Office"));
         assert_eq!(summarize(&f).unplaced, 1);
+    }
+
+    #[test]
+    fn bluetooth_only_expectations_are_informational() {
+        let f = audit(
+            None,
+            &[],
+            &[],
+            &[],
+            &[Expectation {
+                id: Some("H617A_X".into()),
+                name: Some("Shelf Strip".into()),
+                room: "Office".into(),
+                source: Some("govee".into()),
+                cloud: Some(false),
+            }],
+        );
+        assert_eq!(f[0].status, Status::LocalOnly);
+        assert_eq!(summarize(&f).local_only, 1);
+        assert_eq!(summarize(&f).unmatched, 0);
     }
 
     #[test]

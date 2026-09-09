@@ -133,8 +133,16 @@ the vendor CLIs emit so the audit can be piped:
 Devices are joined on the vendor id against Google's `partner_device_id`
 (punctuation and case ignored), then on name. The result (`room-audit/v1`)
 has a `summary` and one row per device: `ok`, `mismatch` (with
-`expected_room`), `unassigned`, or `unmatched` (an expectation with no
-Google device).
+`expected_room`), `unassigned`, `unplaced`, `unmatched` (an expectation with
+no Google device), or `local_only` (an expectation flagged `"cloud": false`,
+a Bluetooth-only device Google Home can never see; informational).
+
+The vendor CLIs emit this shape directly:
+
+```console
+govee rooms devices | ghome audit --expect - --problems
+tplc groups devices | ghome audit --expect - --problems
+```
 
 ### Raw API
 
