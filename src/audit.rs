@@ -176,9 +176,16 @@ pub fn audit(
     {
         let by_id = d.partner_device_id.as_deref().map(norm_id);
         let by_name = norm_name(&d.name);
-        let hit = expectations.iter().enumerate().find(|(_, e)| {
-            let id_match = matches!((&by_id, &e.id), (Some(a), Some(b)) if *a == norm_id(b));
-            id_match || e.name.as_deref().map(norm_name) == Some(by_name.clone())
+        // An id match beats a name match, and a row already claimed by
+        // another device is never reused: twins with the same name (two
+        // "Island Light"s) each keep their own row.
+        let id_hit = expectations.iter().enumerate().find(|(i, e)| {
+            !used[*i] && matches!((&by_id, &e.id), (Some(a), Some(b)) if *a == norm_id(b))
+        });
+        let hit = id_hit.or_else(|| {
+            expectations.iter().enumerate().find(|(i, e)| {
+                !used[*i] && e.name.as_deref().map(norm_name) == Some(by_name.clone())
+            })
         });
         let (expected, source) = match hit {
             Some((i, e)) => {
@@ -346,6 +353,31 @@ mod tests {
             (s.ok, s.mismatch, s.unassigned, s.unplaced, s.unmatched),
             (1, 1, 1, 0, 1)
         );
+    }
+
+    #[test]
+    fn twins_with_the_same_name_each_keep_their_own_row() {
+        let kitchen = room("r1", "Kitchen");
+        let rooms = vec![&kitchen];
+        let a = device("d1", "Island Light", Some("Kitchen"), Some("H6004_AA"));
+        let b = device("d2", "Island Light", Some("Kitchen"), Some("H6004_BB"));
+        let expectations = vec![
+            Expectation {
+                id: Some("H6004_AA".into()),
+                name: Some("Island Light".into()),
+                room: "Kitchen".into(),
+                source: None,
+            },
+            Expectation {
+                id: Some("H6004_BB".into()),
+                name: Some("Island Light".into()),
+                room: "Kitchen".into(),
+                source: None,
+            },
+        ];
+        let f = audit(None, &[&a, &b], &[], &rooms, &expectations);
+        assert_eq!(f.len(), 2, "no unmatched row: {f:?}");
+        assert!(f.iter().all(|x| x.status == Status::Ok));
     }
 
     #[test]
