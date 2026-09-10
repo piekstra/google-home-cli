@@ -484,28 +484,52 @@ mod tests {
         let rooms = vec![&office];
         let placed = device("d1", "Office Light Bars", Some("Office"), Some("H6056_AA"));
         let lost = device("d2", "Desk Plug", None, Some("P2"));
-        let row = |id: &str, name: Option<&str>| Expectation {
+        let anon = device("d3", "Hall Plug", Some("Office"), Some("P3"));
+        let row = |id: &str, name: Option<&str>, vendor: Option<&str>| Expectation {
             id: Some(id.into()),
             name: name.map(str::to_string),
             room: None,
-            source: Some("govee".into()),
+            source: vendor.map(str::to_string),
             cloud: None,
         };
         let expectations = vec![
-            row("H6056_AA", None),
-            row("P2", None),
-            row("GONE", Some("Ghost")),
+            row("H6056_AA", None, Some("govee")),
+            row("P2", None, Some("govee")),
+            row("P3", None, None),
+            row("GONE", Some("Ghost"), Some("govee")),
         ];
-        let f = audit(None, &[&placed, &lost], &[], &rooms, &expectations);
+        let f = audit(None, &[&placed, &lost, &anon], &[], &rooms, &expectations);
         assert_eq!(f[0].status, Status::Unfiled);
         assert!(f[0].expected_room.is_none());
-        assert_eq!(f[0].source.as_deref(), Some("govee"));
+        // `source` stays the closed set; the vendor rides in its own field.
+        assert_eq!(f[0].source.as_deref(), Some("expect"));
+        assert_eq!(f[0].vendor.as_deref(), Some("govee"));
         // Google's own gap is reported first; the vendor's shows once it is fixed.
         assert_eq!(f[1].status, Status::Unassigned);
-        assert_eq!(f[2].status, Status::Unmatched);
-        assert!(f[2].expected_room.is_none());
+        // A vendor row that names no vendor: no made-up provenance.
+        assert_eq!(f[2].status, Status::Unfiled);
+        assert_eq!(f[2].source.as_deref(), Some("expect"));
+        assert!(f[2].vendor.is_none());
+        assert_eq!(f[3].status, Status::Unmatched);
+        assert!(f[3].expected_room.is_none());
+        assert_eq!(f[3].vendor.as_deref(), Some("govee"));
         let s = summarize(&f);
-        assert_eq!((s.unfiled, s.unassigned, s.unmatched), (1, 1, 1));
+        assert_eq!((s.unfiled, s.unassigned, s.unmatched), (2, 1, 1));
+        // The human line lists every counter the JSON has, in the same order.
+        let line = summary_line(&s);
+        let keys: Vec<String> = serde_json::to_value(&s)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|k| k.replace('_', "-"))
+            .collect();
+        let labels: Vec<&str> = line
+            .split(" · ")
+            .map(|p| p.split(' ').next().unwrap())
+            .collect();
+        assert_eq!(labels, keys, "{line}");
+        assert!(line.contains("unfiled 2"), "{line}");
     }
 
     #[test]

@@ -137,7 +137,8 @@ has a `summary` and one row per device: `ok`, `mismatch` (with
 no room, so the vendor app is what needs fixing), `unplaced`, `unmatched` (an
 expectation with no Google device), or `local_only` (an expectation flagged
 `"cloud": false`, a Bluetooth-only device Google Home can never see;
-informational).
+informational). `source` says what decided a row (`expect` or `name`);
+rows that came from a vendor row also carry `vendor` when it named one.
 
 The vendor CLIs emit this shape directly:
 

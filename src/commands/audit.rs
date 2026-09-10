@@ -103,19 +103,18 @@ pub fn run(ctx: &Ctx, args: &AuditArgs, expectations: Vec<Expectation>) -> Resul
         } else {
             output::table(&output::table_view(
                 &rows,
-                &["status", "name", "room", "expected_room", "source", "home"],
+                &[
+                    "status",
+                    "name",
+                    "room",
+                    "expected_room",
+                    "source",
+                    "vendor",
+                    "home",
+                ],
             ));
         }
-        eprintln!(
-            "ok {} · mismatch {} · unassigned {} · unfiled {} · unplaced {} · unmatched {} · local-only {}",
-            summary.ok,
-            summary.mismatch,
-            summary.unassigned,
-            summary.unfiled,
-            summary.unplaced,
-            summary.unmatched,
-            summary.local_only
-        );
+        eprintln!("{}", audit::summary_line(&summary));
     });
     Ok(())
 }
