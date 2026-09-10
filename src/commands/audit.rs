@@ -103,18 +103,23 @@ pub fn run(ctx: &Ctx, args: &AuditArgs, expectations: Vec<Expectation>) -> Resul
         } else {
             output::table(&output::table_view(
                 &rows,
-                &["status", "name", "room", "expected_room", "source", "home"],
+                &[
+                    "status",
+                    "name",
+                    "room",
+                    "expected_room",
+                    "source",
+                    "vendor",
+                    "home",
+                ],
             ));
         }
-        eprintln!(
-            "ok {} · mismatch {} · unassigned {} · unplaced {} · unmatched {} · local-only {}",
-            summary.ok,
-            summary.mismatch,
-            summary.unassigned,
-            summary.unplaced,
-            summary.unmatched,
-            summary.local_only
-        );
+        let line: Vec<String> = summary
+            .counts()
+            .iter()
+            .map(|(label, n)| format!("{label} {n}"))
+            .collect();
+        eprintln!("{}", line.join(" · "));
     });
     Ok(())
 }

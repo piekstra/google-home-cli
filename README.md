@@ -133,15 +133,19 @@ the vendor CLIs emit so the audit can be piped:
 Devices are joined on the vendor id against Google's `partner_device_id`
 (punctuation and case ignored), then on name. The result (`room-audit/v1`)
 has a `summary` and one row per device: `ok`, `mismatch` (with
-`expected_room`), `unassigned`, `unplaced`, `unmatched` (an expectation with
-no Google device), or `local_only` (an expectation flagged `"cloud": false`,
-a Bluetooth-only device Google Home can never see; informational).
+`expected_room`), `unassigned`, `unfiled` (the vendor row that matched names
+no room, so the vendor app is what needs fixing), `unplaced`, `unmatched` (an
+expectation with no Google device), or `local_only` (an expectation flagged
+`"cloud": false`, a Bluetooth-only device Google Home can never see;
+informational). `source` says what decided a row (`expect` or `name`);
+rows that came from a vendor row also carry `vendor` when it named one.
 
 The vendor CLIs emit this shape directly:
 
 ```console
-govee rooms devices | ghome audit --expect - --problems
-tplc groups devices | ghome audit --expect - --problems
+govee --json rooms devices | ghome audit --expect - --problems
+tplc --json rooms devices | ghome audit --expect - --problems    # Tapo rooms
+tplc --json groups devices | ghome audit --expect - --problems   # Kasa groups
 ```
 
 ### Raw API

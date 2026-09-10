@@ -25,7 +25,11 @@ pub struct Expectation {
     pub id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    pub room: String,
+    /// The room the vendor's app files the device under. Absent when it
+    /// files the device nowhere: nothing can be verified, and the vendor
+    /// side is what needs fixing (`Status::Unfiled`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub room: Option<String>,
     /// Which vendor reported it (`govee`, `tplink`, …); free text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
@@ -45,6 +49,10 @@ pub enum Status {
     Mismatch,
     /// Not in any room.
     Unassigned,
+    /// In a room here, but the vendor row that matched names none: the
+    /// vendor's own app files the device nowhere, so the vendor side needs
+    /// fixing before the placement can be checked.
+    Unfiled,
     /// An expectation that matched no Google Home device.
     Unmatched,
     /// An expectation for a device the vendor can't expose to Google Home
@@ -69,6 +77,10 @@ pub struct Finding {
     /// device's name did.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// The vendor behind a matched expectation (`govee`, `tplink`, …), when
+    /// its row named one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vendor: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub partner_device_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -80,6 +92,7 @@ pub struct Summary {
     pub ok: usize,
     pub mismatch: usize,
     pub unassigned: usize,
+    pub unfiled: usize,
     pub unplaced: usize,
     pub unmatched: usize,
     pub local_only: usize,
@@ -115,7 +128,7 @@ pub fn parse_expectations(raw: &str) -> Result<Vec<Expectation>, CliError> {
     if let Some(bad) = parsed.iter().find(|e| e.id.is_none() && e.name.is_none()) {
         return Err(CliError::Usage(format!(
             "--expect item for room `{}` has neither `id` nor `name`",
-            bad.room
+            bad.room.as_deref().unwrap_or("(none)")
         )));
     }
     Ok(parsed)
@@ -196,20 +209,26 @@ pub fn audit(
                 !used[*i] && e.name.as_deref().map(norm_name) == Some(by_name.clone())
             })
         });
-        let (expected, source) = match hit {
+        let (expected, source, vendor) = match hit {
             Some((i, e)) => {
                 used[i] = true;
-                (Some(e.room.clone()), Some("expect".to_string()))
+                (e.room.clone(), Some("expect".to_string()), e.source.clone())
             }
             None => (
                 room_from_name(&d.name, d.room.as_deref(), rooms).map(|r| r.name.clone()),
                 None,
+                None,
             ),
         };
+        // A vendor row that names no room can't be checked against. Google's
+        // own gaps still come first: a room here is what the vendor-side fix
+        // gets compared with.
+        let unfiled = hit.is_some() && expected.is_none();
         let source = source.or_else(|| expected.as_ref().map(|_| "name".to_string()));
         let status = match (placed, &d.room, &expected) {
             (false, _, _) => Status::Unplaced,
             (_, None, _) => Status::Unassigned,
+            _ if unfiled => Status::Unfiled,
             (_, Some(cur), Some(exp)) if norm_name(cur) != norm_name(exp) => Status::Mismatch,
             _ => Status::Ok,
         };
@@ -220,6 +239,7 @@ pub fn audit(
             room: d.room.clone(),
             expected_room: if status == Status::Ok { None } else { expected },
             source: if status == Status::Ok { None } else { source },
+            vendor: if status == Status::Ok { None } else { vendor },
             partner_device_id: d.partner_device_id.clone(),
             home: home_name.map(str::to_string),
         });
@@ -236,14 +256,41 @@ pub fn audit(
                 device_id: None,
                 name: e.name.clone().or_else(|| e.id.clone()).unwrap_or_default(),
                 room: None,
-                expected_room: Some(e.room.clone()),
-                source: e.source.clone().or_else(|| Some("expect".into())),
+                expected_room: e.room.clone(),
+                source: Some("expect".into()),
+                vendor: e.source.clone(),
                 partner_device_id: e.id.clone(),
                 home: home_name.map(str::to_string),
             });
         }
     }
     findings
+}
+
+impl Summary {
+    /// Every counter with its label, in report order. Destructuring makes
+    /// the compiler reject a new field that is not listed here, so the
+    /// human line the command renders can never drop what the JSON has.
+    pub fn counts(&self) -> [(&'static str, usize); 7] {
+        let Summary {
+            ok,
+            mismatch,
+            unassigned,
+            unfiled,
+            unplaced,
+            unmatched,
+            local_only,
+        } = self;
+        [
+            ("ok", *ok),
+            ("mismatch", *mismatch),
+            ("unassigned", *unassigned),
+            ("unfiled", *unfiled),
+            ("unplaced", *unplaced),
+            ("unmatched", *unmatched),
+            ("local-only", *local_only),
+        ]
+    }
 }
 
 pub fn summarize(findings: &[Finding]) -> Summary {
@@ -253,6 +300,7 @@ pub fn summarize(findings: &[Finding]) -> Summary {
             Status::Ok => s.ok += 1,
             Status::Mismatch => s.mismatch += 1,
             Status::Unassigned => s.unassigned += 1,
+            Status::Unfiled => s.unfiled += 1,
             Status::Unplaced => s.unplaced += 1,
             Status::Unmatched => s.unmatched += 1,
             Status::LocalOnly => s.local_only += 1,
@@ -336,21 +384,21 @@ mod tests {
             Expectation {
                 id: Some("aabbcc".into()),
                 name: None,
-                room: "Office".into(),
+                room: Some("Office".into()),
                 source: Some("govee".into()),
                 cloud: None,
             },
             Expectation {
                 id: None,
                 name: Some("couch light".into()),
-                room: "Living Room".into(),
+                room: Some("Living Room".into()),
                 source: None,
                 cloud: None,
             },
             Expectation {
                 id: Some("ZZZ".into()),
                 name: Some("Ghost".into()),
-                room: "Attic".into(),
+                room: Some("Attic".into()),
                 source: Some("tplink".into()),
                 cloud: None,
             },
@@ -382,14 +430,14 @@ mod tests {
             Expectation {
                 id: Some("H6004_AA".into()),
                 name: Some("Island Light".into()),
-                room: "Kitchen".into(),
+                room: Some("Kitchen".into()),
                 source: None,
                 cloud: None,
             },
             Expectation {
                 id: Some("H6004_BB".into()),
                 name: Some("Island Light".into()),
-                room: "Kitchen".into(),
+                room: Some("Kitchen".into()),
                 source: None,
                 cloud: None,
             },
@@ -431,7 +479,7 @@ mod tests {
             &[Expectation {
                 id: Some("H617A_X".into()),
                 name: Some("Shelf Strip".into()),
-                room: "Office".into(),
+                room: Some("Office".into()),
                 source: Some("govee".into()),
                 cloud: Some(false),
             }],
@@ -442,11 +490,64 @@ mod tests {
     }
 
     #[test]
+    fn a_vendor_row_without_a_room_is_unfiled() {
+        let office = room("r1", "Office");
+        let rooms = vec![&office];
+        let placed = device("d1", "Office Light Bars", Some("Office"), Some("H6056_AA"));
+        let lost = device("d2", "Desk Plug", None, Some("P2"));
+        let anon = device("d3", "Hall Plug", Some("Office"), Some("P3"));
+        let row = |id: &str, name: Option<&str>, vendor: Option<&str>| Expectation {
+            id: Some(id.into()),
+            name: name.map(str::to_string),
+            room: None,
+            source: vendor.map(str::to_string),
+            cloud: None,
+        };
+        let expectations = vec![
+            row("H6056_AA", None, Some("govee")),
+            row("P2", None, Some("govee")),
+            row("P3", None, None),
+            row("GONE", Some("Ghost"), Some("govee")),
+        ];
+        let f = audit(None, &[&placed, &lost, &anon], &[], &rooms, &expectations);
+        assert_eq!(f[0].status, Status::Unfiled);
+        assert!(f[0].expected_room.is_none());
+        // `source` stays the closed set; the vendor rides in its own field.
+        assert_eq!(f[0].source.as_deref(), Some("expect"));
+        assert_eq!(f[0].vendor.as_deref(), Some("govee"));
+        // Google's own gap is reported first; the vendor's shows once it is fixed.
+        assert_eq!(f[1].status, Status::Unassigned);
+        // A vendor row that names no vendor: no made-up provenance.
+        assert_eq!(f[2].status, Status::Unfiled);
+        assert_eq!(f[2].source.as_deref(), Some("expect"));
+        assert!(f[2].vendor.is_none());
+        assert_eq!(f[3].status, Status::Unmatched);
+        assert!(f[3].expected_room.is_none());
+        assert_eq!(f[3].vendor.as_deref(), Some("govee"));
+        let s = summarize(&f);
+        assert_eq!((s.unfiled, s.unassigned, s.unmatched), (2, 1, 1));
+        // The counters the human line renders are the JSON's, in its order.
+        let keys: Vec<String> = serde_json::to_value(&s)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|k| k.replace('_', "-"))
+            .collect();
+        let labels: Vec<&str> = s.counts().iter().map(|(l, _)| *l).collect();
+        assert_eq!(labels, keys);
+        assert!(s.counts().contains(&("unfiled", 2)));
+    }
+
+    #[test]
     fn expectations_parse_from_envelope_or_bare_array() {
         let env = r#"{"schema":"device-rooms/v1","items":[{"id":"x","room":"Office"}]}"#;
         assert_eq!(parse_expectations(env).unwrap().len(), 1);
         let bare = r#"[{"name":"Lamp","room":"Office"}]"#;
         assert_eq!(parse_expectations(bare).unwrap().len(), 1);
+        // A vendor that files the device in no room omits `room`.
+        let unfiled = parse_expectations(r#"[{"id":"x","source":"govee"}]"#).unwrap();
+        assert!(unfiled[0].room.is_none());
         assert!(matches!(parse_expectations("{"), Err(CliError::Usage(_))));
         assert!(matches!(
             parse_expectations(r#"[{"room":"Office"}]"#),

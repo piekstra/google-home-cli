@@ -13,7 +13,7 @@ not built), **blocked** (needs something we don't have yet), **idea**.
 | List homes, rooms, devices, room membership | done | `homes`, `rooms`, `devices` over `GetHomeGraph` |
 | Devices linked to the account but in no home | done | `devices list --unplaced` (`ListUnassignedDevices`) |
 | Vendor-reported online state | done | `devices list --status` / `--offline` (`GetTraits`) |
-| Room audit: name heuristic + vendor expectations | done | `audit`, `--expect` takes `device-rooms/v1` |
+| Room audit: name heuristic + vendor expectations | done | `audit`, `--expect` takes `device-rooms/v1`; a vendor row without `room` is reported `unfiled` (the vendor app files the device nowhere; found five such Govee devices on 2026-09-10 that the audit had been blind to) |
 | Move a device between rooms | done | `devices move` (`BatchModifySpacesDevices`) |
 | Add an unplaced device to the home / a room | done | `devices place` (`BatchModifyStructuresDevices`) |
 | Create / rename a room | done | `rooms create`, `rooms rename` |
