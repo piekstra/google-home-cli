@@ -107,10 +107,11 @@ pub fn run(ctx: &Ctx, args: &AuditArgs, expectations: Vec<Expectation>) -> Resul
             ));
         }
         eprintln!(
-            "ok {} · mismatch {} · unassigned {} · unplaced {} · unmatched {} · local-only {}",
+            "ok {} · mismatch {} · unassigned {} · unfiled {} · unplaced {} · unmatched {} · local-only {}",
             summary.ok,
             summary.mismatch,
             summary.unassigned,
+            summary.unfiled,
             summary.unplaced,
             summary.unmatched,
             summary.local_only
