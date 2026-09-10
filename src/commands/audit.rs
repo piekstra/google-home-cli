@@ -114,7 +114,12 @@ pub fn run(ctx: &Ctx, args: &AuditArgs, expectations: Vec<Expectation>) -> Resul
                 ],
             ));
         }
-        eprintln!("{}", audit::summary_line(&summary));
+        let line: Vec<String> = summary
+            .counts()
+            .iter()
+            .map(|(label, n)| format!("{label} {n}"))
+            .collect();
+        eprintln!("{}", line.join(" · "));
     });
     Ok(())
 }

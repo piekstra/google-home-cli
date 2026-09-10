@@ -267,19 +267,30 @@ pub fn audit(
     findings
 }
 
-/// The one-line human summary, derived from the serialized `Summary` so it
-/// can never disagree with the JSON: every counter, in field order.
-pub fn summary_line(summary: &Summary) -> String {
-    serde_json::to_value(summary)
-        .ok()
-        .and_then(|v| v.as_object().cloned())
-        .map(|m| {
-            m.iter()
-                .map(|(k, n)| format!("{} {n}", k.replace('_', "-")))
-                .collect::<Vec<_>>()
-                .join(" · ")
-        })
-        .unwrap_or_default()
+impl Summary {
+    /// Every counter with its label, in report order. Destructuring makes
+    /// the compiler reject a new field that is not listed here, so the
+    /// human line the command renders can never drop what the JSON has.
+    pub fn counts(&self) -> [(&'static str, usize); 7] {
+        let Summary {
+            ok,
+            mismatch,
+            unassigned,
+            unfiled,
+            unplaced,
+            unmatched,
+            local_only,
+        } = self;
+        [
+            ("ok", *ok),
+            ("mismatch", *mismatch),
+            ("unassigned", *unassigned),
+            ("unfiled", *unfiled),
+            ("unplaced", *unplaced),
+            ("unmatched", *unmatched),
+            ("local-only", *local_only),
+        ]
+    }
 }
 
 pub fn summarize(findings: &[Finding]) -> Summary {
@@ -515,8 +526,7 @@ mod tests {
         assert_eq!(f[3].vendor.as_deref(), Some("govee"));
         let s = summarize(&f);
         assert_eq!((s.unfiled, s.unassigned, s.unmatched), (2, 1, 1));
-        // The human line lists every counter the JSON has, in the same order.
-        let line = summary_line(&s);
+        // The counters the human line renders are the JSON's, in its order.
         let keys: Vec<String> = serde_json::to_value(&s)
             .unwrap()
             .as_object()
@@ -524,12 +534,9 @@ mod tests {
             .keys()
             .map(|k| k.replace('_', "-"))
             .collect();
-        let labels: Vec<&str> = line
-            .split(" · ")
-            .map(|p| p.split(' ').next().unwrap())
-            .collect();
-        assert_eq!(labels, keys, "{line}");
-        assert!(line.contains("unfiled 2"), "{line}");
+        let labels: Vec<&str> = s.counts().iter().map(|(l, _)| *l).collect();
+        assert_eq!(labels, keys);
+        assert!(s.counts().contains(&("unfiled", 2)));
     }
 
     #[test]
