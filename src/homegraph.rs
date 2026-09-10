@@ -281,86 +281,30 @@ impl HomeGraph {
     }
 }
 
-/// Resolve a user-supplied device reference: exact id, then exact name
-/// (case-insensitive), then a unique substring match. Ambiguity is a usage
-/// error that lists the candidates, never a silent first pick.
+/// Resolve a user-supplied device reference with the family ladder
+/// (`pk_cli_core::resolve::pick`): exact name, exact id, case-insensitive
+/// name, then a unique partial name; ambiguity names the candidates.
 pub fn resolve_device<'a>(devices: &[&'a Device], query: &str) -> Result<&'a Device, CliError> {
-    if let Some(d) = devices.iter().find(|d| d.id == query) {
-        return Ok(d);
-    }
-    let want = norm(query);
-    let exact: Vec<&Device> = devices
-        .iter()
-        .copied()
-        .filter(|d| norm(&d.name) == want)
-        .collect();
-    match exact.len() {
-        1 => return Ok(exact[0]),
-        n if n > 1 => return Err(ambiguous("device", query, exact.iter().map(|d| label(d)))),
-        _ => {}
-    }
-    let partial: Vec<&Device> = devices
-        .iter()
-        .copied()
-        .filter(|d| norm(&d.name).contains(&want))
-        .collect();
-    match partial.len() {
-        0 => Err(CliError::NotFound(format!("no device matching `{query}`"))),
-        1 => Ok(partial[0]),
-        _ => Err(ambiguous("device", query, partial.iter().map(|d| label(d)))),
-    }
+    pk_cli_core::resolve::pick(
+        devices,
+        query,
+        |d| vec![d.id.clone()],
+        |d| d.name.as_str(),
+        "device",
+    )
+    .copied()
 }
 
 /// Same ladder for rooms.
 pub fn resolve_room<'a>(rooms: &[&'a Room], query: &str) -> Result<&'a Room, CliError> {
-    if let Some(r) = rooms.iter().find(|r| r.id == query) {
-        return Ok(r);
-    }
-    let want = norm(query);
-    let exact: Vec<&Room> = rooms
-        .iter()
-        .copied()
-        .filter(|r| norm(&r.name) == want)
-        .collect();
-    match exact.len() {
-        1 => return Ok(exact[0]),
-        n if n > 1 => {
-            return Err(ambiguous(
-                "room",
-                query,
-                exact.iter().map(|r| r.name.clone()),
-            ))
-        }
-        _ => {}
-    }
-    let partial: Vec<&Room> = rooms
-        .iter()
-        .copied()
-        .filter(|r| norm(&r.name).contains(&want))
-        .collect();
-    match partial.len() {
-        0 => Err(CliError::NotFound(format!("no room matching `{query}`"))),
-        1 => Ok(partial[0]),
-        _ => Err(ambiguous(
-            "room",
-            query,
-            partial.iter().map(|r| r.name.clone()),
-        )),
-    }
-}
-
-fn label(d: &Device) -> String {
-    match &d.room {
-        Some(r) => format!("{} [{}] ({})", d.name, r, d.id),
-        None => format!("{} ({})", d.name, d.id),
-    }
-}
-
-fn ambiguous(what: &str, query: &str, candidates: impl Iterator<Item = String>) -> CliError {
-    CliError::Usage(format!(
-        "`{query}` matches more than one {what}: {}",
-        candidates.collect::<Vec<_>>().join("; ")
-    ))
+    pk_cli_core::resolve::pick(
+        rooms,
+        query,
+        |r| vec![r.id.clone()],
+        |r| r.name.as_str(),
+        "room",
+    )
+    .copied()
 }
 
 #[cfg(test)]
@@ -536,7 +480,7 @@ mod tests {
         assert_eq!(resolve_device(&devs, "desk").unwrap().id, "dev-2");
         assert!(matches!(
             resolve_device(&devs, "plug"),
-            Err(CliError::Usage(_))
+            Err(CliError::NotFound(_))
         ));
         assert!(matches!(
             resolve_device(&devs, "toaster"),

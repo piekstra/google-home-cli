@@ -20,12 +20,12 @@ clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-pk-cli-core = { git = "https://github.com/piekstra/cli-common", tag = "v0.7.0", features = ["reqwest"] }
-pk-cli-secrets = { git = "https://github.com/piekstra/cli-common", tag = "v0.7.0" }
-pk-cli-config = { git = "https://github.com/piekstra/cli-common", tag = "v0.7.0" }
-pk-cli-selfupdate = { git = "https://github.com/piekstra/cli-common", tag = "v0.7.0" }
-pk-cli-auth = { git = "https://github.com/piekstra/cli-common", tag = "v0.7.0" }
-pk-cli-http = { git = "https://github.com/piekstra/cli-common", tag = "v0.7.0" }
+pk-cli-core = { git = "https://github.com/piekstra/cli-common", tag = "v0.8.0", features = ["reqwest"] }
+pk-cli-secrets = { git = "https://github.com/piekstra/cli-common", tag = "v0.8.0" }
+pk-cli-config = { git = "https://github.com/piekstra/cli-common", tag = "v0.8.0" }
+pk-cli-selfupdate = { git = "https://github.com/piekstra/cli-common", tag = "v0.8.0" }
+pk-cli-auth = { git = "https://github.com/piekstra/cli-common", tag = "v0.8.0" }
+pk-cli-http = { git = "https://github.com/piekstra/cli-common", tag = "v0.8.0" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "cookies", "rustls-tls", "http2"] }
 
 # Native gRPC over HTTP/2 for the RPCs the JSON gateway can't carry; reqwest

@@ -12,7 +12,7 @@ pub mod rooms;
 pub mod routines;
 
 use pk_cli_config::ConfigStore;
-use pk_cli_core::{output, CliError};
+use pk_cli_core::CliError;
 use pk_cli_secrets::CredentialStore;
 use serde_json::Value;
 
@@ -131,36 +131,7 @@ impl<'a> Ctx<'a> {
     }
 }
 
-/// The mutation gate (SPEC §1.3). Call **before** any network work when the
-/// answer is knowable up front: with `--force` it passes; non-interactive
-/// without it is exit 6, so a driver never hangs on a prompt.
-pub fn require_confirmable(force: bool, interactive: bool, what: &str) -> Result<(), CliError> {
-    if force || interactive {
-        Ok(())
-    } else {
-        Err(CliError::ConfirmationRequired(format!(
-            "{what} — pass --force to run non-interactively"
-        )))
-    }
-}
-
-/// Interactive yes/no on stderr; only reached when `require_confirmable`
-/// passed without `--force`.
-pub fn confirm(force: bool, prompt: &str) -> Result<(), CliError> {
-    if force {
-        return Ok(());
-    }
-    eprint!("{prompt} [y/N] ");
-    let mut line = String::new();
-    std::io::stdin()
-        .read_line(&mut line)
-        .map_err(|e| CliError::Other(format!("reading confirmation: {e}")))?;
-    if matches!(line.trim().to_lowercase().as_str(), "y" | "yes") {
-        Ok(())
-    } else {
-        Err(CliError::ConfirmationRequired("cancelled".into()))
-    }
-}
+pub use pk_cli_core::confirm::{confirm, require_confirmable};
 
 /// Refuse to send a write while the wire layout is still a placeholder.
 pub fn require_layout() -> Result<(), CliError> {
@@ -205,24 +176,7 @@ pub fn agent_counts(
         .collect())
 }
 
-/// Emit a list DTO: `{"schema": "<record>-list/v1", "items": [...]}` in JSON
-/// mode, a pipe table of `columns` otherwise.
-pub fn emit_list(json: bool, record: &str, items: Vec<Value>, columns: &[&str]) {
-    let payload = serde_json::json!({ "items": items });
-    output::emit(json, &format!("{record}-list"), payload, |v| {
-        let rows = output::rows_of(v, "items");
-        if rows.is_empty() {
-            eprintln!("(no {record}s)");
-        } else {
-            output::table(&output::table_view(&rows, columns));
-        }
-    });
-}
-
-/// Emit a single resource: the DTO in JSON mode, a key/value block otherwise.
-pub fn emit_one(json: bool, schema: &str, value: Value) {
-    output::emit(json, schema, value, |v| output::kv(v, 0));
-}
+pub use pk_cli_core::output::{emit_list, emit_one};
 
 /// A device row flattened for tables: traits collapse to their short names.
 pub fn device_row(home: &Home, d: &homegraph::Device) -> Value {
