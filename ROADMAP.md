@@ -52,7 +52,7 @@ not built), **blocked** (needs something we don't have yet), **idea**.
 | Kasa rooms from the cloud (`tplc groups list`) | done | `api.tplinkra.com/v1/device-groups` with the SDK envelope, verified live; this account has no Kasa groups (its rooms are in the Tapo app) |
 | Govee rooms (`govee rooms list`) | done | private app API, email + emailed code (read from Gmail by `gro`); `rooms devices` feeds `ghome audit --expect -`, verified end to end |
 | Govee room writes (`govee rooms move|create|rename|delete`) | done | govee-cli #19; endpoints decoded from Govee Home for Android 7.6.21; verified live 2026-09-10 (room created, seven devices moved, all read back) |
-| Tapo rooms (`tplc rooms list|devices|move|create|rename|delete`) | next | decoded from Tapo for Android 3.20.753: NBU app-server (`/v1/families` with rooms, `/v2/things` for membership, `POST /v1/families/thing-settings` to move); being built on tplc's spec-v1 branch |
+| Tapo rooms (`tplc rooms list|devices|move|create|rename|delete`) | done (live check pending) | tplink-cloud-cli #3; NBU app-server (`/v1/families`, `/v2/things`, `POST /v1/families/thing-settings`), decoded from Tapo for Android 3.20.753 |
 | Emit `device-rooms/v1` from both for `ghome audit --expect -` | done | `tplc groups devices`, `govee rooms devices` |
 
 ## Platform
@@ -62,4 +62,5 @@ not built), **blocked** (needs something we don't have yet), **idea**.
 | Browser-handoff login, keychain credential, cached bearer | done | `auth login` |
 | Raw RPC passthrough | done | `api POST <Service>/<Method> --data '[...]'`; `--proto <base64>` sends serialized protobuf, `--grpc-web` frames it |
 | Public repo, releases, self-update | done | release on version bump |
+| Vendor CLIs on the family spec | done | govee-cli #20 and tplink-cloud-cli #3 (2026-09-10): text default + `--json`, family exit codes, `auth`/`config`/`self-update`/`info`, `piekstra.<bin>` keychain with migration; cli-common v0.8.0 carries the shared confirm gate, `pick` resolver, `emit_list`, keychain JSON items and the `device-rooms/v1` contract |
 | Broadcast to one device via local Cast (no Google auth) | idea | mDNS + Cast protocol; fallback if the cloud path stays closed |
