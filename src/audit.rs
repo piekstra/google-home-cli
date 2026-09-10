@@ -77,6 +77,10 @@ pub struct Finding {
     /// device's name did.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// The vendor behind a matched expectation (`govee`, `tplink`, …), when
+    /// its row named one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vendor: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub partner_device_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -234,11 +238,8 @@ pub fn audit(
             name: d.name.clone(),
             room: d.room.clone(),
             expected_room: if status == Status::Ok { None } else { expected },
-            source: match status {
-                Status::Ok => None,
-                Status::Unfiled => vendor.or(source),
-                _ => source,
-            },
+            source: if status == Status::Ok { None } else { source },
+            vendor: if status == Status::Ok { None } else { vendor },
             partner_device_id: d.partner_device_id.clone(),
             home: home_name.map(str::to_string),
         });
@@ -256,13 +257,29 @@ pub fn audit(
                 name: e.name.clone().or_else(|| e.id.clone()).unwrap_or_default(),
                 room: None,
                 expected_room: e.room.clone(),
-                source: e.source.clone().or_else(|| Some("expect".into())),
+                source: Some("expect".into()),
+                vendor: e.source.clone(),
                 partner_device_id: e.id.clone(),
                 home: home_name.map(str::to_string),
             });
         }
     }
     findings
+}
+
+/// The one-line human summary, derived from the serialized `Summary` so it
+/// can never disagree with the JSON: every counter, in field order.
+pub fn summary_line(summary: &Summary) -> String {
+    serde_json::to_value(summary)
+        .ok()
+        .and_then(|v| v.as_object().cloned())
+        .map(|m| {
+            m.iter()
+                .map(|(k, n)| format!("{} {n}", k.replace('_', "-")))
+                .collect::<Vec<_>>()
+                .join(" · ")
+        })
+        .unwrap_or_default()
 }
 
 pub fn summarize(findings: &[Finding]) -> Summary {
