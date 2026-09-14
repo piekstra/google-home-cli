@@ -239,8 +239,13 @@ live 2026-09-14 on a Nest Hub Max:
   `playerState` is `IDLE` (`idleReason FINISHED`) → restore the volume →
   `STOP {sessionId}` so a display returns to its ambient screen → `CLOSE`.
   Heartbeat `PING`s are answered with `PONG` whenever they arrive.
-- Speech: `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=<lang>&q=<text>`,
+- Speech (`src/speech.rs`): `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=<lang>&q=<text>`,
   which the device fetches itself. Unofficial; 200-character limit.
+- Cleanup (volume back, `STOP`, `CLOSE`) runs on every path once the
+  volume may have changed; anything that fails there is a `warning` on the
+  device's row, not a failed announcement. `IDLE` with `CANCELLED`,
+  `INTERRUPTED` or `ERROR` is reported as not played (`error_kind`
+  `playback`); the device plays every target concurrently.
 
 **Traps.** The receiver also chats on `…cast.multizone` and sends
 unsolicited `RECEIVER_STATUS`/`MEDIA_STATUS` with `requestId: 0`; match

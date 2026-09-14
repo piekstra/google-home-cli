@@ -12,16 +12,22 @@
 //! One announcement is: CONNECT to `receiver-0` → LAUNCH the Default Media
 //! Receiver (`CC1AD845`) → RECEIVER_STATUS gives the app's `transportId` →
 //! CONNECT to it → LOAD the audio URL → MEDIA_STATUS until the player goes
-//! IDLE with `FINISHED` → STOP the app so a display returns to its ambient
-//! screen. Whatever was playing before is interrupted, as with a broadcast.
+//! IDLE (`FINISHED` is success; `CANCELLED`, `INTERRUPTED` and `ERROR` are
+//! not) → restore the volume and STOP the app, on every path, so a display
+//! returns to its ambient screen. Whatever was playing before is
+//! interrupted, as with a broadcast.
+//!
+//! `Conn` is generic over the stream so the session can be driven offline
+//! by a scripted device in the tests; `Conn::open` is the TLS constructor.
 
+use std::fmt;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use pk_cli_core::CliError;
 use serde_json::{json, Value};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 pub const SERVICE_TYPE: &str = "_googlecast._tcp.local.";
 const DEFAULT_MEDIA_RECEIVER: &str = "CC1AD845";
@@ -92,29 +98,59 @@ pub fn discover(window: Duration) -> Result<Vec<CastDevice>, CliError> {
     Ok(found)
 }
 
-/// Percent-encode for a query string (RFC 3986 unreserved characters pass).
-pub fn url_encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() * 3);
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
+// ---- errors ----------------------------------------------------------------
+
+/// Why an announcement did not play, by what the caller can do about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CastError {
+    /// No TCP connection to the device.
+    Connect(String),
+    /// The TLS handshake failed.
+    Tls(String),
+    /// The device refused to launch the media receiver (its reason).
+    LaunchRefused(String),
+    /// The device could not load the audio (usually it cannot fetch the URL).
+    LoadFailed(String),
+    /// Playback ended for a reason other than finishing (`CANCELLED`, …).
+    Playback(String),
+    /// A reply did not arrive in time (what we were waiting for).
+    Timeout(String),
+    /// Something on the wire was not a Cast message, or the socket died.
+    Protocol(String),
 }
 
-/// Generated speech for `message`: Google Translate's text-to-speech
-/// endpoint, which Cast devices fetch directly (the same trick the
-/// home-automation crowd has used for years; unofficial, ≤ 200 characters).
-pub fn tts_url(message: &str, lang: &str) -> String {
-    format!(
-        "https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl={}&q={}",
-        url_encode(lang),
-        url_encode(message)
-    )
+impl CastError {
+    /// A stable label for `--json` consumers.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            CastError::Connect(_) => "connect",
+            CastError::Tls(_) => "tls",
+            CastError::LaunchRefused(_) => "launch_refused",
+            CastError::LoadFailed(_) => "load_failed",
+            CastError::Playback(_) => "playback",
+            CastError::Timeout(_) => "timeout",
+            CastError::Protocol(_) => "protocol",
+        }
+    }
+}
+
+impl fmt::Display for CastError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CastError::Connect(e) => write!(f, "could not connect: {e}"),
+            CastError::Tls(e) => write!(f, "TLS handshake failed: {e}"),
+            CastError::LaunchRefused(r) => {
+                write!(f, "the device refused to launch the media receiver ({r})")
+            }
+            CastError::LoadFailed(r) => write!(
+                f,
+                "the device could not play the audio ({r}); it may not be able to fetch it"
+            ),
+            CastError::Playback(r) => write!(f, "playback ended early ({r})"),
+            CastError::Timeout(what) => write!(f, "no answer in time while waiting for {what}"),
+            CastError::Protocol(e) => write!(f, "{e}"),
+        }
+    }
 }
 
 // ---- CastMessage v2 framing --------------------------------------------
@@ -239,59 +275,11 @@ pub fn player_state(status: &Value) -> Option<(String, Option<String>)> {
     Some((state, reason))
 }
 
-// ---- the session ----------------------------------------------------------
-
-/// What one announcement did on one device.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct Outcome {
-    pub name: String,
-    pub model: String,
-    pub ip: String,
-    pub played: bool,
-    /// The player's final state, e.g. `IDLE/FINISHED`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub final_state: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+fn msg_type(v: &Value) -> &str {
+    v.get("type").and_then(Value::as_str).unwrap_or("")
 }
 
-/// Play `url` on `dev` and wait for it to finish. `volume`, when given, is
-/// set for the announcement and the previous level restored afterwards.
-pub fn play(
-    dev: &CastDevice,
-    url: &str,
-    title: &str,
-    volume: Option<u8>,
-    verbose: bool,
-) -> Outcome {
-    let mut out = Outcome {
-        name: dev.name.clone(),
-        model: dev.model.clone(),
-        ip: dev.ip.to_string(),
-        played: false,
-        final_state: None,
-        error: None,
-    };
-    let rt = match tokio::runtime::Builder::new_current_thread()
-        .enable_io()
-        .enable_time()
-        .build()
-    {
-        Ok(rt) => rt,
-        Err(e) => {
-            out.error = Some(format!("runtime: {e}"));
-            return out;
-        }
-    };
-    match rt.block_on(session(dev, url, title, volume, verbose)) {
-        Ok(state) => {
-            out.played = true;
-            out.final_state = Some(state);
-        }
-        Err(e) => out.error = Some(e),
-    }
-    out
-}
+// ---- the connection --------------------------------------------------------
 
 /// A rustls verifier that accepts the device's self-signed certificate.
 /// The connection is still encrypted; what is not checked is who is on
@@ -347,18 +335,20 @@ impl rustls::client::danger::ServerCertVerifier for AcceptAny {
 
 type Tls = tokio_rustls::client::TlsStream<tokio::net::TcpStream>;
 
-struct Conn {
-    tls: Tls,
+/// One Cast connection: the message pump over any async stream.
+pub struct Conn<S> {
+    stream: S,
     verbose: bool,
     request_id: u64,
 }
 
-impl Conn {
-    async fn open(dev: &CastDevice, verbose: bool) -> Result<Conn, String> {
+impl Conn<Tls> {
+    /// TLS to the device's Cast port.
+    pub async fn open(dev: &CastDevice, verbose: bool) -> Result<Conn<Tls>, CastError> {
         let provider = Arc::new(rustls::crypto::ring::default_provider());
         let cfg = rustls::ClientConfig::builder_with_provider(provider.clone())
             .with_safe_default_protocol_versions()
-            .map_err(|e| e.to_string())?
+            .map_err(|e| CastError::Tls(e.to_string()))?
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(AcceptAny(provider)))
             .with_no_client_auth();
@@ -367,18 +357,24 @@ impl Conn {
             tokio::net::TcpStream::connect((dev.ip, dev.port)),
         )
         .await
-        .map_err(|_| format!("connect to {}:{} timed out", dev.ip, dev.port))?
-        .map_err(|e| format!("connect to {}:{}: {e}", dev.ip, dev.port))?;
+        .map_err(|_| CastError::Connect(format!("{}:{} timed out", dev.ip, dev.port)))?
+        .map_err(|e| CastError::Connect(format!("{}:{}: {e}", dev.ip, dev.port)))?;
         let name = rustls::pki_types::ServerName::IpAddress(dev.ip.into());
-        let tls = tokio_rustls::TlsConnector::from(Arc::new(cfg))
+        let stream = tokio_rustls::TlsConnector::from(Arc::new(cfg))
             .connect(name, tcp)
             .await
-            .map_err(|e| format!("TLS to {}: {e}", dev.ip))?;
-        Ok(Conn {
-            tls,
+            .map_err(|e| CastError::Tls(e.to_string()))?;
+        Ok(Conn::new(stream, verbose))
+    }
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
+    pub fn new(stream: S, verbose: bool) -> Conn<S> {
+        Conn {
+            stream,
             verbose,
             request_id: 0,
-        })
+        }
     }
 
     fn next_id(&mut self) -> u64 {
@@ -386,7 +382,7 @@ impl Conn {
         self.request_id
     }
 
-    async fn send(&mut self, dest: &str, ns: &str, payload: &Value) -> Result<(), String> {
+    async fn send(&mut self, dest: &str, ns: &str, payload: &Value) -> Result<(), CastError> {
         let text = payload.to_string();
         if self.verbose {
             eprintln!(
@@ -394,31 +390,33 @@ impl Conn {
                 ns.rsplit('.').next().unwrap_or(ns)
             );
         }
-        self.tls
+        self.stream
             .write_all(&encode(SENDER, dest, ns, &text))
             .await
-            .map_err(|e| format!("send: {e}"))
+            .map_err(|e| CastError::Protocol(format!("send: {e}")))
     }
 
     /// The next message, answering heartbeats along the way.
-    async fn recv(&mut self) -> Result<Message, String> {
+    async fn recv(&mut self) -> Result<Message, CastError> {
         loop {
             let mut len = [0u8; 4];
-            self.tls
+            self.stream
                 .read_exact(&mut len)
                 .await
-                .map_err(|e| format!("read: {e}"))?;
+                .map_err(|e| CastError::Protocol(format!("read: {e}")))?;
             let n = u32::from_be_bytes(len) as usize;
             if n > 1 << 20 {
-                return Err(format!("frame of {n} bytes is not a Cast message"));
+                return Err(CastError::Protocol(format!(
+                    "frame of {n} bytes is not a Cast message"
+                )));
             }
             let mut body = vec![0u8; n];
-            self.tls
+            self.stream
                 .read_exact(&mut body)
                 .await
-                .map_err(|e| format!("read: {e}"))?;
+                .map_err(|e| CastError::Protocol(format!("read: {e}")))?;
             let Some(m) = decode(&body) else {
-                return Err("undecodable Cast message".into());
+                return Err(CastError::Protocol("undecodable Cast message".into()));
             };
             if self.verbose {
                 eprintln!(
@@ -440,105 +438,219 @@ impl Conn {
         }
     }
 
-    /// Wait for a message in `ns` whose JSON satisfies `want`.
+    /// The first message in `ns` whose JSON satisfies `want`; `what` names
+    /// it for the timeout error.
     async fn wait_for(
         &mut self,
         ns: &str,
+        what: &str,
         limit: Duration,
         mut want: impl FnMut(&Value) -> bool,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, CastError> {
         let deadline = tokio::time::Instant::now() + limit;
         loop {
             let left = deadline
                 .checked_duration_since(tokio::time::Instant::now())
-                .ok_or_else(|| "the device did not answer in time".to_string())?;
+                .ok_or_else(|| CastError::Timeout(what.to_string()))?;
             let m = tokio::time::timeout(left, self.recv())
                 .await
-                .map_err(|_| "the device did not answer in time".to_string())??;
+                .map_err(|_| CastError::Timeout(what.to_string()))??;
             if m.namespace != ns {
                 continue;
             }
             let Ok(v) = serde_json::from_str::<Value>(&m.payload) else {
                 continue;
             };
-            if v.get("type").and_then(Value::as_str) == Some("LAUNCH_ERROR") {
-                return Err(format!(
-                    "the device refused to launch the media receiver: {}",
-                    v.get("reason").and_then(Value::as_str).unwrap_or("unknown")
-                ));
-            }
             if want(&v) {
                 return Ok(v);
             }
         }
     }
+
+    /// A receiver request whose RECEIVER_STATUS reply is awaited by request id.
+    async fn receiver_request(&mut self, mut payload: Value) -> Result<Value, CastError> {
+        let id = self.next_id();
+        payload["requestId"] = json!(id);
+        let what = format!("the reply to {}", msg_type(&payload));
+        self.send(RECEIVER, NS_RECEIVER, &payload).await?;
+        self.wait_for(NS_RECEIVER, &what, REPLY_TIMEOUT, |v| {
+            v.get("requestId").and_then(Value::as_u64) == Some(id)
+        })
+        .await
+    }
 }
 
-/// One full announcement; returns the player's final state.
-async fn session(
+// ---- the session -----------------------------------------------------------
+
+/// What one announcement did on one device.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Outcome {
+    pub name: String,
+    pub model: String,
+    pub ip: String,
+    pub played: bool,
+    /// The player's final state, e.g. `IDLE/FINISHED`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub final_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// `CastError::kind` for the error, when there is one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<&'static str>,
+    /// Cleanup that did not take (volume not restored, app not stopped);
+    /// the announcement itself still played.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
+/// Play `url` on `dev` and wait for it to finish. `volume`, when given, is
+/// set for the announcement and the previous level restored afterwards.
+pub async fn play(
     dev: &CastDevice,
     url: &str,
     title: &str,
     volume: Option<u8>,
     verbose: bool,
-) -> Result<String, String> {
-    let mut c = Conn::open(dev, verbose).await?;
-    c.send(RECEIVER, NS_CONNECTION, &json!({"type": "CONNECT"}))
-        .await?;
+) -> Outcome {
+    let mut out = Outcome {
+        name: dev.name.clone(),
+        model: dev.model.clone(),
+        ip: dev.ip.to_string(),
+        played: false,
+        final_state: None,
+        error: None,
+        error_kind: None,
+        warnings: Vec::new(),
+    };
+    let (result, warnings) = match Conn::open(dev, verbose).await {
+        Ok(mut c) => session(&mut c, url, title, volume).await,
+        Err(e) => (Err(e), Vec::new()),
+    };
+    out.warnings = warnings;
+    match result {
+        Ok(state) => {
+            out.played = true;
+            out.final_state = Some(state);
+        }
+        Err(e) => {
+            out.error_kind = Some(e.kind());
+            out.error = Some(e.to_string());
+        }
+    }
+    out
+}
 
+/// One full announcement on an open connection: the result of playback,
+/// plus any cleanup (volume restore, STOP, CLOSE) that failed. Cleanup
+/// runs whatever happened once the volume may have been changed.
+pub async fn session<S: AsyncRead + AsyncWrite + Unpin>(
+    c: &mut Conn<S>,
+    url: &str,
+    title: &str,
+    volume: Option<u8>,
+) -> (Result<String, CastError>, Vec<String>) {
+    let mut warnings = Vec::new();
+    if let Err(e) = c
+        .send(RECEIVER, NS_CONNECTION, &json!({"type": "CONNECT"}))
+        .await
+    {
+        return (Err(e), warnings);
+    }
     // Where the volume is now, so it can be put back.
-    let id = c.next_id();
-    c.send(
-        RECEIVER,
-        NS_RECEIVER,
-        &json!({"type": "GET_STATUS", "requestId": id}),
-    )
-    .await?;
-    let status = c
-        .wait_for(NS_RECEIVER, REPLY_TIMEOUT, |v| {
-            v.get("requestId").and_then(Value::as_u64) == Some(id)
-        })
-        .await?;
-    let previous = volume_level(&status);
-    if let Some(pct) = volume {
+    let status = match c.receiver_request(json!({"type": "GET_STATUS"})).await {
+        Ok(s) => s,
+        Err(e) => return (Err(e), warnings),
+    };
+    let previous = volume.and(volume_level(&status));
+
+    let mut session_id: Option<String> = None;
+    let played = playback(c, url, title, volume, &mut session_id).await;
+
+    // Leave the device as it was: previous volume, no app on screen.
+    if let Some(level) = previous {
+        if let Err(e) = c
+            .receiver_request(json!({"type": "SET_VOLUME", "volume": {"level": level}}))
+            .await
+        {
+            warnings.push(format!("volume not restored: {e}"));
+        }
+    }
+    if let Some(sid) = session_id {
         let id = c.next_id();
-        c.send(
-            RECEIVER,
-            NS_RECEIVER,
-            &json!({"type": "SET_VOLUME", "requestId": id, "volume": {"level": f64::from(pct) / 100.0}}),
+        if let Err(e) = c
+            .send(
+                RECEIVER,
+                NS_RECEIVER,
+                &json!({"type": "STOP", "requestId": id, "sessionId": sid}),
+            )
+            .await
+        {
+            warnings.push(format!("media receiver not stopped: {e}"));
+        }
+    }
+    if let Err(e) = c
+        .send(RECEIVER, NS_CONNECTION, &json!({"type": "CLOSE"}))
+        .await
+    {
+        warnings.push(format!("connection not closed: {e}"));
+    }
+    (played, warnings)
+}
+
+/// SET_VOLUME → LAUNCH → LOAD → play to the end. `session_id` is filled as
+/// soon as the app is up so the caller can STOP it even if this fails.
+async fn playback<S: AsyncRead + AsyncWrite + Unpin>(
+    c: &mut Conn<S>,
+    url: &str,
+    title: &str,
+    volume: Option<u8>,
+    session_id: &mut Option<String>,
+) -> Result<String, CastError> {
+    if let Some(pct) = volume {
+        c.receiver_request(
+            json!({"type": "SET_VOLUME", "volume": {"level": f64::from(pct) / 100.0}}),
         )
         .await?;
-        c.wait_for(NS_RECEIVER, REPLY_TIMEOUT, |v| {
-            v.get("requestId").and_then(Value::as_u64) == Some(id)
-        })
-        .await?;
     }
-
-    let id = c.next_id();
+    let launch_id = c.next_id();
     c.send(
         RECEIVER,
         NS_RECEIVER,
-        &json!({"type": "LAUNCH", "requestId": id, "appId": DEFAULT_MEDIA_RECEIVER}),
+        &json!({"type": "LAUNCH", "requestId": launch_id, "appId": DEFAULT_MEDIA_RECEIVER}),
     )
     .await?;
     let launched = c
-        .wait_for(NS_RECEIVER, REPLY_TIMEOUT, |v| transport_id(v).is_some())
+        .wait_for(
+            NS_RECEIVER,
+            "the media receiver to launch",
+            REPLY_TIMEOUT,
+            |v| msg_type(v) == "LAUNCH_ERROR" || transport_id(v).is_some(),
+        )
         .await?;
+    if msg_type(&launched) == "LAUNCH_ERROR" {
+        return Err(CastError::LaunchRefused(
+            launched
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_string(),
+        ));
+    }
     let transport = transport_id(&launched).expect("checked by wait_for");
-    let session_id = launched
+    *session_id = launched
         .pointer("/status/applications/0/sessionId")
         .and_then(Value::as_str)
         .map(str::to_string);
 
     c.send(&transport, NS_CONNECTION, &json!({"type": "CONNECT"}))
         .await?;
-    let id = c.next_id();
+    let load_id = c.next_id();
     c.send(
         &transport,
         NS_MEDIA,
         &json!({
             "type": "LOAD",
-            "requestId": id,
+            "requestId": load_id,
             "autoplay": true,
             "media": {
                 "contentId": url,
@@ -550,74 +662,39 @@ async fn session(
     )
     .await?;
     // First a status that says it is playing (or failed to), then one that
-    // says it finished.
+    // says it stopped. The receiver's first MEDIA_STATUS after LOAD is
+    // empty and the next is a plain IDLE, so "stopped" is only meaningful
+    // after "playing".
     let started = c
-        .wait_for(NS_MEDIA, REPLY_TIMEOUT, |v| {
-            let t = v.get("type").and_then(Value::as_str);
-            t == Some("LOAD_FAILED")
-                || t == Some("LOAD_CANCELLED")
+        .wait_for(NS_MEDIA, "playback to start", REPLY_TIMEOUT, |v| {
+            let t = msg_type(v);
+            t == "LOAD_FAILED"
+                || t == "LOAD_CANCELLED"
                 || player_state(v).is_some_and(|(s, _)| s == "PLAYING" || s == "BUFFERING")
         })
         .await?;
-    if started.get("type").and_then(Value::as_str) != Some("MEDIA_STATUS") {
-        return Err(format!(
-            "the device could not play the audio ({})",
-            started.get("type").and_then(Value::as_str).unwrap_or("?")
-        ));
+    if msg_type(&started) != "MEDIA_STATUS" {
+        return Err(CastError::LoadFailed(msg_type(&started).to_string()));
     }
     let done = c
-        .wait_for(NS_MEDIA, PLAYBACK_TIMEOUT, |v| {
+        .wait_for(NS_MEDIA, "playback to finish", PLAYBACK_TIMEOUT, |v| {
             player_state(v).is_some_and(|(s, _)| s == "IDLE")
         })
         .await?;
     let (state, reason) = player_state(&done).unwrap_or_default();
-    let final_state = match reason {
-        Some(r) => format!("{state}/{r}"),
-        None => state,
-    };
-
-    // Leave the device as it was: previous volume, no app on screen.
-    if volume.is_some() {
-        if let Some(level) = previous {
-            let id = c.next_id();
-            let _ = c
-                .send(
-                    RECEIVER,
-                    NS_RECEIVER,
-                    &json!({"type": "SET_VOLUME", "requestId": id, "volume": {"level": level}}),
-                )
-                .await;
-            let _ = c
-                .wait_for(NS_RECEIVER, REPLY_TIMEOUT, |v| {
-                    v.get("requestId").and_then(Value::as_u64) == Some(id)
-                })
-                .await;
-        }
+    match reason.as_deref() {
+        Some("FINISHED") | None => Ok(match reason {
+            Some(r) => format!("{state}/{r}"),
+            None => state,
+        }),
+        Some(other) => Err(CastError::Playback(other.to_string())),
     }
-    if let Some(sid) = session_id {
-        let id = c.next_id();
-        let _ = c
-            .send(
-                RECEIVER,
-                NS_RECEIVER,
-                &json!({"type": "STOP", "requestId": id, "sessionId": sid}),
-            )
-            .await;
-    }
-    let _ = c
-        .send(RECEIVER, NS_CONNECTION, &json!({"type": "CLOSE"}))
-        .await;
-    if final_state.ends_with("/ERROR") {
-        return Err(format!(
-            "the device stopped with an error ({final_state}); it may not be able to fetch the audio"
-        ));
-    }
-    Ok(final_state)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn frames_round_trip() {
@@ -654,14 +731,218 @@ mod tests {
         assert!(player_state(&json!({"type": "MEDIA_STATUS", "status": []})).is_none());
     }
 
+    /// How a scripted device answers LAUNCH and LOAD.
+    #[derive(Clone, Copy)]
+    struct Script {
+        refuse_launch: bool,
+        load: &'static str, // "finished" | "cancelled" | "load_failed"
+    }
+
+    /// The other end of the pipe: a Cast receiver that answers like a Nest
+    /// Hub (the unsolicited empty and IDLE statuses included) and logs what
+    /// it was sent as `destination:type`.
+    async fn fake_device(
+        mut s: tokio::io::DuplexStream,
+        script: Script,
+        log: Arc<Mutex<Vec<String>>>,
+    ) {
+        let mut pinged = false;
+        loop {
+            let mut len = [0u8; 4];
+            if s.read_exact(&mut len).await.is_err() {
+                return;
+            }
+            let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
+            if s.read_exact(&mut body).await.is_err() {
+                return;
+            }
+            let m = decode(&body).unwrap();
+            let v: Value = serde_json::from_str(&m.payload).unwrap();
+            let t = msg_type(&v).to_string();
+            log.lock().unwrap().push(format!("{}:{t}", m.destination));
+            if m.namespace == NS_CONNECTION && t == "CLOSE" && m.destination == RECEIVER {
+                return;
+            }
+            let rid = v.get("requestId").cloned().unwrap_or(json!(0));
+            let mut replies: Vec<(&str, &str, Value)> = Vec::new();
+            let media = |state: &str, reason: Option<&str>| {
+                let mut st = json!({"mediaSessionId": 1, "playerState": state});
+                if let Some(r) = reason {
+                    st["idleReason"] = json!(r);
+                }
+                json!({"type": "MEDIA_STATUS", "requestId": 0, "status": [st]})
+            };
+            match (m.namespace.as_str(), t.as_str()) {
+                (NS_RECEIVER, "GET_STATUS") => {
+                    if !pinged {
+                        pinged = true;
+                        replies.push((RECEIVER, NS_HEARTBEAT, json!({"type": "PING"})));
+                    }
+                    replies.push((
+                        RECEIVER,
+                        NS_RECEIVER,
+                        json!({"type": "RECEIVER_STATUS", "requestId": rid, "status": {"volume": {"level": 0.5}}}),
+                    ));
+                }
+                (NS_RECEIVER, "SET_VOLUME") => replies.push((
+                    RECEIVER,
+                    NS_RECEIVER,
+                    json!({"type": "RECEIVER_STATUS", "requestId": rid, "status": {"volume": v["volume"].clone()}}),
+                )),
+                (NS_RECEIVER, "LAUNCH") if script.refuse_launch => replies.push((
+                    RECEIVER,
+                    NS_RECEIVER,
+                    json!({"type": "LAUNCH_ERROR", "requestId": rid, "reason": "NOT_FOUND"}),
+                )),
+                (NS_RECEIVER, "LAUNCH") => replies.push((
+                    RECEIVER,
+                    NS_RECEIVER,
+                    json!({"type": "RECEIVER_STATUS", "requestId": rid, "status": {
+                        "applications": [{"appId": DEFAULT_MEDIA_RECEIVER, "transportId": "t1", "sessionId": "s1"}],
+                        "volume": {"level": 0.5}}}),
+                )),
+                (NS_MEDIA, "LOAD") => {
+                    replies.push((
+                        "t1",
+                        NS_MEDIA,
+                        json!({"type": "MEDIA_STATUS", "requestId": 0, "status": []}),
+                    ));
+                    if script.load == "load_failed" {
+                        replies.push((
+                            "t1",
+                            NS_MEDIA,
+                            json!({"type": "LOAD_FAILED", "requestId": rid}),
+                        ));
+                    } else {
+                        replies.push(("t1", NS_MEDIA, media("IDLE", None)));
+                        replies.push(("t1", NS_MEDIA, media("BUFFERING", None)));
+                        replies.push(("t1", NS_MEDIA, media("PLAYING", None)));
+                        let reason = if script.load == "cancelled" {
+                            "CANCELLED"
+                        } else {
+                            "FINISHED"
+                        };
+                        replies.push(("t1", NS_MEDIA, media("IDLE", Some(reason))));
+                    }
+                }
+                (NS_RECEIVER, "STOP") => replies.push((
+                    RECEIVER,
+                    NS_RECEIVER,
+                    json!({"type": "RECEIVER_STATUS", "requestId": rid, "status": {}}),
+                )),
+                _ => {}
+            }
+            // A reply the sender no longer reads (it may have hung up after
+            // its last frame) is not this device's problem.
+            for (src, ns, payload) in replies {
+                let _ = s
+                    .write_all(&encode(src, SENDER, ns, &payload.to_string()))
+                    .await;
+            }
+        }
+    }
+
+    fn drive(
+        script: Script,
+        volume: Option<u8>,
+    ) -> (Result<String, CastError>, Vec<String>, Vec<String>) {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (ours, theirs) = tokio::io::duplex(64 * 1024);
+            let log = Arc::new(Mutex::new(Vec::new()));
+            let device = tokio::spawn(fake_device(theirs, script, log.clone()));
+            let mut c = Conn::new(ours, false);
+            let (result, warnings) = session(&mut c, "http://x/a.mp3", "t", volume).await;
+            drop(c);
+            let _ = device.await;
+            let log = log.lock().unwrap().clone();
+            (result, warnings, log)
+        })
+    }
+
+    fn count(log: &[String], entry: &str) -> usize {
+        log.iter().filter(|l| *l == entry).count()
+    }
+
     #[test]
-    fn speech_urls_are_encoded() {
-        let u = tts_url("Dinner's ready, come down!", "en-GB");
-        assert!(u.starts_with(
-            "https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=en-GB&q="
-        ));
-        assert!(u.ends_with("Dinner%27s%20ready%2C%20come%20down%21"));
-        assert_eq!(url_encode("a-b_c.d~e"), "a-b_c.d~e");
-        assert_eq!(url_encode("é"), "%C3%A9");
+    fn a_full_announcement_plays_and_restores_the_device() {
+        let (result, warnings, log) = drive(
+            Script {
+                refuse_launch: false,
+                load: "finished",
+            },
+            Some(30),
+        );
+        assert_eq!(result, Ok("IDLE/FINISHED".to_string()));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(
+            log.contains(&"receiver-0:PONG".to_string()),
+            "heartbeat answered: {log:?}"
+        );
+        assert_eq!(
+            count(&log, "receiver-0:SET_VOLUME"),
+            2,
+            "set, then restored: {log:?}"
+        );
+        assert_eq!(count(&log, "t1:LOAD"), 1);
+        let stop = log
+            .iter()
+            .position(|l| l == "receiver-0:STOP")
+            .expect("app stopped");
+        let restore = log
+            .iter()
+            .rposition(|l| l == "receiver-0:SET_VOLUME")
+            .unwrap();
+        assert!(restore < stop, "volume back before the app goes: {log:?}");
+        assert_eq!(log.last().map(String::as_str), Some("receiver-0:CLOSE"));
+    }
+
+    #[test]
+    fn a_failed_load_still_restores_volume_and_stops_the_app() {
+        let (result, warnings, log) = drive(
+            Script {
+                refuse_launch: false,
+                load: "load_failed",
+            },
+            Some(80),
+        );
+        assert_eq!(result, Err(CastError::LoadFailed("LOAD_FAILED".into())));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(count(&log, "receiver-0:SET_VOLUME"), 2, "{log:?}");
+        assert_eq!(count(&log, "receiver-0:STOP"), 1, "{log:?}");
+        assert_eq!(log.last().map(String::as_str), Some("receiver-0:CLOSE"));
+    }
+
+    #[test]
+    fn a_refused_launch_has_no_app_to_stop_but_still_restores_volume() {
+        let (result, _, log) = drive(
+            Script {
+                refuse_launch: true,
+                load: "finished",
+            },
+            Some(50),
+        );
+        assert_eq!(result, Err(CastError::LaunchRefused("NOT_FOUND".into())));
+        assert_eq!(count(&log, "receiver-0:SET_VOLUME"), 2, "{log:?}");
+        assert_eq!(count(&log, "receiver-0:STOP"), 0, "{log:?}");
+        assert_eq!(log.last().map(String::as_str), Some("receiver-0:CLOSE"));
+    }
+
+    #[test]
+    fn an_interrupted_announcement_is_not_a_success_and_no_volume_means_no_restore() {
+        let (result, _, log) = drive(
+            Script {
+                refuse_launch: false,
+                load: "cancelled",
+            },
+            None,
+        );
+        assert_eq!(result, Err(CastError::Playback("CANCELLED".into())));
+        assert_eq!(count(&log, "receiver-0:SET_VOLUME"), 0, "{log:?}");
+        assert_eq!(count(&log, "receiver-0:STOP"), 1, "{log:?}");
+        assert_eq!(CastError::Playback("x".into()).kind(), "playback");
     }
 }

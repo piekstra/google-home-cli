@@ -10,6 +10,7 @@ use super::{emit_one, Ctx};
 use crate::announce;
 use crate::cast::{self, CastDevice};
 use crate::homegraph::{resolve_device, resolve_room};
+use crate::speech;
 
 #[derive(Args, Debug, Clone)]
 pub struct AnnounceArgs {
@@ -60,7 +61,7 @@ pub fn validate(args: &AnnounceArgs) -> Result<(), CliError> {
         return Err(CliError::Usage("nothing to announce".into()));
     }
     let limit = if args.via == "local" && args.url.is_none() {
-        200
+        speech::MAX_CHARS
     } else {
         256
     };
@@ -151,12 +152,31 @@ fn run_local(ctx: &Ctx, args: &AnnounceArgs) -> Result<usize, CliError> {
     let targets = select(&found, args.device.as_deref(), room_members.as_deref())?;
     let url = match &args.url {
         Some(u) => u.clone(),
-        None => cast::tts_url(message, &args.lang),
+        None => speech::tts_url(message, &args.lang),
     };
-    let outcomes: Vec<cast::Outcome> = targets
-        .iter()
-        .map(|d| cast::play(d, &url, message, args.volume, ctx.verbose))
-        .collect();
+    // Every device at once: a broadcast, not a relay, and one device that
+    // hangs cannot hold the others up.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .map_err(|e| CliError::Other(format!("runtime: {e}")))?;
+    let outcomes: Vec<cast::Outcome> = rt.block_on(async {
+        let mut set = tokio::task::JoinSet::new();
+        for (i, d) in targets.iter().enumerate() {
+            let (d, url, title) = ((*d).clone(), url.clone(), message.to_string());
+            let (volume, verbose) = (args.volume, ctx.verbose);
+            set.spawn(async move { (i, cast::play(&d, &url, &title, volume, verbose).await) });
+        }
+        let mut done = Vec::new();
+        while let Some(r) = set.join_next().await {
+            if let Ok(x) = r {
+                done.push(x);
+            }
+        }
+        done.sort_by_key(|(i, _)| *i);
+        done.into_iter().map(|(_, o)| o).collect()
+    });
     let failed = outcomes.iter().filter(|o| !o.played).count();
     let items: Vec<Value> = outcomes
         .iter()
