@@ -185,7 +185,15 @@ fn run(cli: &Cli) -> Result<(), CliError> {
         Command::Rooms(cmd) => commands::rooms::run(&ctx, cmd),
         Command::Devices(cmd) => commands::devices::run(&ctx, cmd),
         Command::Agents(cmd) => commands::agents::run(&ctx, cmd),
-        Command::Routines(cmd) => commands::routines::run(&ctx, cmd),
+        Command::Routines(cmd) => {
+            let problems = commands::routines::run(&ctx, cmd)?;
+            if problems > 0 {
+                exit_reported(CliError::Usage(format!(
+                    "Google rejected the script ({problems} problem(s)); see the report"
+                )));
+            }
+            Ok(())
+        }
         Command::Announce(args) => {
             let failed = commands::announce::run(&ctx, args)?;
             if failed > 0 {

@@ -6,7 +6,7 @@
 use std::io::Read;
 
 use clap::Subcommand;
-use pk_cli_core::CliError;
+use pk_cli_core::{output, CliError};
 use serde_json::{json, Value};
 
 use super::rooms::HomeFlag;
@@ -350,14 +350,14 @@ fn one_home(ctx: &Ctx, flag: &HomeFlag) -> Result<(String, String), CliError> {
     Ok((homes[0].id.clone(), homes[0].name.clone()))
 }
 
-/// Ask Google to check a script; a rejection is a usage error naming what
-/// it did not like. `id` is the automation being replaced, if any.
+/// Ask Google to check a script: the problems it found, none when the
+/// script is fine. `id` is the automation being replaced, if any.
 fn validate_with_google(
     ctx: &Ctx,
     home_id: &str,
     id: Option<&str>,
     script: &str,
-) -> Result<(), CliError> {
+) -> Result<Vec<ScriptError>, CliError> {
     let mut errors =
         validation_errors(&ctx.write(SERVICE, VALIDATE, &validate_body(home_id, id, script))?);
     if looks_cold(&errors) {
@@ -368,6 +368,11 @@ fn validate_with_google(
             &validate_body(home_id, id, script),
         )?);
     }
+    Ok(errors)
+}
+
+/// A write refuses a rejected script, naming what Google did not like.
+fn require_valid(errors: Vec<ScriptError>) -> Result<(), CliError> {
     if errors.is_empty() {
         return Ok(());
     }
@@ -381,23 +386,41 @@ fn validate_with_google(
     )))
 }
 
-/// Upsert and read back: the automation must be in the home's list afterwards.
+/// Upsert and read back: the home's list must carry the automation as
+/// Google's reply described it (name and the starter/action summaries).
+/// A replacement that keeps those summaries is indistinguishable from the
+/// old script here, which the DTO's `read_back: "listed"` says.
 fn upsert(ctx: &Ctx, home_id: &str, id: Option<&str>, script: &str) -> Result<Routine, CliError> {
     let raw = ctx.write(SERVICE, UPSERT, &upsert_body(home_id, id, script))?;
     let saved = parse_row(&raw).ok_or_else(|| {
         CliError::Upstream(format!("Google accepted the script but answered {raw}"))
     })?;
     let listed = ctx.write(SERVICE, LIST, &json!([home_id]))?;
-    if !parse_list(&listed).iter().any(|r| r.id == saved.id) {
-        return Err(CliError::Upstream(
+    match parse_list(&listed).into_iter().find(|r| r.id == saved.id) {
+        Some(row)
+            if row.name == saved.name
+                && row.starters == saved.starters
+                && row.actions == saved.actions =>
+        {
+            Ok(saved)
+        }
+        Some(row) => Err(CliError::Upstream(format!(
+            "Google accepted the script but lists the automation as \"{}\" ({}, {}) on read-back",
+            row.name,
+            row.starters.as_deref().unwrap_or("?"),
+            row.actions.as_deref().unwrap_or("?")
+        ))),
+        None => Err(CliError::Upstream(
             "Google accepted the script but the home does not list the automation on read-back"
                 .into(),
-        ));
+        )),
     }
-    Ok(saved)
 }
 
-pub fn run(ctx: &Ctx, cmd: &RoutinesCmd) -> Result<(), CliError> {
+/// Returns how many problems `validate` reported (the report is already
+/// out, so `main` turns a nonzero count into the exit code); other
+/// subcommands return 0.
+pub fn run(ctx: &Ctx, cmd: &RoutinesCmd) -> Result<usize, CliError> {
     match cmd {
         RoutinesCmd::List(flag) => {
             let items: Vec<Value> = all_routines(ctx, flag)?
@@ -410,7 +433,7 @@ pub fn run(ctx: &Ctx, cmd: &RoutinesCmd) -> Result<(), CliError> {
                 items,
                 &["name", "runnable", "starters", "home", "id"],
             );
-            Ok(())
+            Ok(0)
         }
         RoutinesCmd::Run {
             routine,
@@ -443,24 +466,35 @@ pub fn run(ctx: &Ctx, cmd: &RoutinesCmd) -> Result<(), CliError> {
                 "routine-run",
                 json!({"id": r.id, "name": r.name, "home": home_name, "started": true}),
             );
-            Ok(())
+            Ok(0)
         }
         RoutinesCmd::Validate { file, home } => {
             let script = load_script(file)?;
             let (home_id, home_name) = one_home(ctx, home)?;
-            validate_with_google(ctx, &home_id, None, &script)?;
-            emit_one(
-                ctx.json,
-                "routine-validate",
-                json!({"valid": true, "home": home_name, "bytes": script.len()}),
-            );
-            Ok(())
+            let errors = validate_with_google(ctx, &home_id, None, &script)?;
+            let valid = errors.is_empty();
+            let payload = json!({
+                "valid": valid,
+                "home": home_name,
+                "bytes": script.len(),
+                "errors": errors,
+            });
+            output::emit(ctx.json, "routine-validate", payload, |_| {
+                if valid {
+                    println!("valid ({} bytes)", script.len());
+                } else {
+                    for e in &errors {
+                        println!("{}", e.render());
+                    }
+                }
+            });
+            Ok(errors.len())
         }
         RoutinesCmd::Create { file, home, force } => {
             let script = load_script(file)?;
             require_confirmable(*force, ctx.interactive, "creating an automation")?;
             let (home_id, home_name) = one_home(ctx, home)?;
-            validate_with_google(ctx, &home_id, None, &script)?;
+            require_valid(validate_with_google(ctx, &home_id, None, &script)?)?;
             confirm(
                 *force,
                 &format!(
@@ -471,8 +505,9 @@ pub fn run(ctx: &Ctx, cmd: &RoutinesCmd) -> Result<(), CliError> {
             let saved = upsert(ctx, &home_id, None, &script)?;
             let mut v = row(&saved, &home_name);
             v["created"] = json!(true);
+            v["read_back"] = json!("listed");
             emit_one(ctx.json, "routine", v);
-            Ok(())
+            Ok(0)
         }
         RoutinesCmd::Update {
             routine,
@@ -483,7 +518,7 @@ pub fn run(ctx: &Ctx, cmd: &RoutinesCmd) -> Result<(), CliError> {
             let script = load_script(file)?;
             require_confirmable(*force, ctx.interactive, "replacing an automation's script")?;
             let (r, home_id, home_name) = find(ctx, home, routine)?;
-            validate_with_google(ctx, &home_id, Some(&r.id), &script)?;
+            require_valid(validate_with_google(ctx, &home_id, Some(&r.id), &script)?)?;
             confirm(
                 *force,
                 &format!("Replace the script of \"{}\" in {home_name}?", r.name),
@@ -492,8 +527,9 @@ pub fn run(ctx: &Ctx, cmd: &RoutinesCmd) -> Result<(), CliError> {
             let mut v = row(&saved, &home_name);
             v["previous_name"] = json!(r.name);
             v["updated"] = json!(true);
+            v["read_back"] = json!("listed");
             emit_one(ctx.json, "routine", v);
-            Ok(())
+            Ok(0)
         }
         RoutinesCmd::Delete {
             routine,
@@ -518,7 +554,7 @@ pub fn run(ctx: &Ctx, cmd: &RoutinesCmd) -> Result<(), CliError> {
                 "routine-delete",
                 json!({"id": r.id, "name": r.name, "home": home_name, "deleted": true}),
             );
-            Ok(())
+            Ok(0)
         }
     }
 }
@@ -644,6 +680,10 @@ mod tests {
         assert!(looks_cold(&errs));
         assert!(!looks_cold(&errs[..1]));
         assert_eq!(plain_text("Amelia&#39;s Room<br>x"), "Amelia's Room x");
+        assert!(require_valid(Vec::new()).is_ok());
+        let e = require_valid(errs).unwrap_err();
+        assert_eq!(e.exit_code(), 2);
+        assert!(e.to_string().contains("line 2:9:"), "{e}");
     }
 
     #[test]
