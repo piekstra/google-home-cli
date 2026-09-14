@@ -143,6 +143,10 @@ mod tests {
     #[test]
     fn write_bodies_follow_the_decoded_layouts() {
         assert_eq!(
+            rename_structure("s", "Lakeside"),
+            json!(["s", [null, "Lakeside"], [["display_name"]]])
+        );
+        assert_eq!(
             move_device("s.r", "d1"),
             json!([null, [[["s.r", [["d1"]]]]]])
         );

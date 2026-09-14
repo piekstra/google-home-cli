@@ -38,8 +38,9 @@ pub enum RoutinesCmd {
         #[arg(long)]
         force: bool,
     },
-    /// One routine with its script, when it is a script automation
-    /// (routine/v1). Legacy Assistant routines have no script here.
+    /// One routine in detail: kind, description, starter and action
+    /// summaries (routine/v1). The list does not carry a script's YAML; keep
+    /// your scripts in files.
     Get {
         /// Routine id, exact name, or unique partial name.
         routine: String,
@@ -94,15 +95,39 @@ pub enum RoutinesCmd {
     },
 }
 
+/// What a list row is, from its own slot (index 8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoutineKind {
+    /// Google's Home/Away presence routines (`structure_<id>.sbr_00N`).
+    Presence,
+    /// A script-editor automation.
+    Script,
+    /// A legacy Assistant routine, edited in the Assistant settings.
+    Assistant,
+    /// A value this build has not seen.
+    Other,
+}
+
+impl RoutineKind {
+    fn from_slot(v: &Value) -> RoutineKind {
+        match v.as_i64() {
+            Some(1) => RoutineKind::Presence,
+            Some(2) => RoutineKind::Script,
+            Some(3) => RoutineKind::Assistant,
+            _ => RoutineKind::Other,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Routine {
     pub id: String,
     pub name: String,
+    pub kind: RoutineKind,
     pub manual: bool,
     pub starters: Option<String>,
     pub actions: Option<String>,
-    /// The script editor's YAML, for script automations (row index 14).
-    pub script: Option<String>,
     /// `metadata.description` of a script automation (row index 26).
     pub description: Option<String>,
 }
@@ -112,15 +137,16 @@ fn at(v: &Value, i: usize) -> &Value {
 }
 
 /// One automation row: `[id, ?, manuallyRunnable, name, starters, actions,
-/// …, 14: [script], …, 26: description]`.
+/// ?, ?, kind, …, 26: description]`. (The save reply also carries the YAML
+/// at 14; list rows never do, so it is not kept.)
 pub fn parse_row(r: &Value) -> Option<Routine> {
     Some(Routine {
         id: at(r, 0).as_str()?.to_string(),
         name: at(r, 3).as_str()?.to_string(),
+        kind: RoutineKind::from_slot(at(r, 8)),
         manual: at(r, 2).as_i64() == Some(1),
         starters: at(r, 4).as_str().map(str::to_string),
         actions: at(r, 5).as_str().map(str::to_string),
-        script: at(at(r, 14), 0).as_str().map(str::to_string),
         description: at(r, 26).as_str().map(str::to_string),
     })
 }
@@ -318,6 +344,7 @@ fn resolve<'a>(all: &'a [Routine], query: &str) -> Result<&'a Routine, CliError>
 fn row(r: &Routine, home: &str) -> Value {
     json!({
         "name": r.name,
+        "kind": r.kind,
         "runnable": r.manual,
         "starters": r.starters,
         "actions": r.actions,
@@ -446,7 +473,7 @@ pub fn run(ctx: &Ctx, cmd: &RoutinesCmd) -> Result<Option<CliError>, CliError> {
                 ctx.json,
                 "routine",
                 items,
-                &["name", "runnable", "starters", "home", "id"],
+                &["name", "kind", "runnable", "starters", "home", "id"],
             );
             Ok(None)
         }
@@ -486,32 +513,8 @@ pub fn run(ctx: &Ctx, cmd: &RoutinesCmd) -> Result<Option<CliError>, CliError> {
         RoutinesCmd::Get { routine, home } => {
             let (r, _, home_name) = find(ctx, home, routine)?;
             let mut v = row(&r, &home_name);
-            v["kind"] = json!(if r.script.is_some() {
-                "script"
-            } else {
-                "assistant"
-            });
             v["description"] = json!(r.description);
-            v["script"] = json!(r.script);
-            output::emit(ctx.json, "routine", v, |v| {
-                println!("{} ({})", r.name, home_name);
-                if let Some(d) = &r.description {
-                    println!("{d}");
-                }
-                match &r.script {
-                    Some(s) => {
-                        println!();
-                        print!("{s}");
-                        if !s.ends_with('\n') {
-                            println!();
-                        }
-                    }
-                    None => println!(
-                        "(no script: a legacy Assistant routine, edited in the Assistant settings)"
-                    ),
-                }
-                let _ = v;
-            });
+            emit_one(ctx.json, "routine", v);
             Ok(None)
         }
         RoutinesCmd::Validate { file, home } => {
@@ -638,6 +641,51 @@ mod tests {
         assert_eq!(l.len(), 2);
         assert!(l[0].manual);
         assert!(!l[1].manual);
+        assert_eq!(l[0].kind, RoutineKind::Other, "short rows carry no kind");
+        let kinds = json!([[
+            [
+                "p",
+                null,
+                0,
+                "Home",
+                "2 starters",
+                "1 action",
+                null,
+                null,
+                1
+            ],
+            [
+                "s",
+                null,
+                1,
+                "Script",
+                "1 starter",
+                "1 action",
+                null,
+                null,
+                2
+            ],
+            [
+                "a",
+                null,
+                1,
+                "Bedtime",
+                "1 starter",
+                "8 actions",
+                null,
+                null,
+                3
+            ]
+        ]]);
+        let k: Vec<RoutineKind> = parse_list(&kinds).iter().map(|r| r.kind).collect();
+        assert_eq!(
+            k,
+            [
+                RoutineKind::Presence,
+                RoutineKind::Script,
+                RoutineKind::Assistant
+            ]
+        );
         assert_eq!(resolve(&l, "good").unwrap().id, "r1");
         assert!(matches!(resolve(&l, "nope"), Err(CliError::NotFound(_))));
     }
@@ -695,7 +743,7 @@ mod tests {
         assert_eq!(upsert_body("h", Some("a1"), "S")[1][0], json!("a1"));
         assert_eq!(delete_body("h", "a1"), json!(["h", "a1"]));
         // The upsert answers with the new row.
-        let reply = json!([
+        let mut reply = json!([
             "a1",
             null,
             1,
@@ -711,6 +759,13 @@ mod tests {
             (r.id.as_str(), r.name.as_str(), r.manual),
             ("a1", "ghome dogfood", true)
         );
+        assert_eq!(r.kind, RoutineKind::Script);
+        // A script automation's description rides at index 26.
+        let arr = reply.as_array_mut().unwrap();
+        arr.resize(27, Value::Null);
+        arr[26] = json!("why");
+        let r = parse_row(&reply).unwrap();
+        assert_eq!(r.description.as_deref(), Some("why"));
         assert_eq!(validate_body("h", Some("a1"), "S")[1][0], json!("a1"));
         assert!(validation_errors(&json!([])).is_empty());
         assert!(validation_errors(&Value::Null).is_empty());
