@@ -21,7 +21,7 @@ not built), **blocked** (needs something we don't have yet), **idea**.
 | Rename a device (Google-side name) | done | `devices rename` (`UpdateDeviceSettings`) |
 | Remove a device from Google Home | done | `devices remove` (`DeleteDevice`); confirmed: a vendor re-sync (`devices sync`) brings a still-listed device back as unplaced, so delete it at the vendor too |
 | Ask every vendor to re-sync | done | `devices sync` |
-| Unlink a vendor integration | blocked | `SetupService/UnlinkApplication` decoded, but its "linkable app id" is not the agent id and no read exposes it yet. Unlinking in the Home app works and is what finally removes a vendor's dead devices (verified: Tuya and Yale gone after unlink + `devices sync`) |
+| Unlink a vendor integration | not possible here | The 4.28.27.1 decompile settles it: `SetupService/UnlinkApplication` (and `GetLinkableApplications`) is the media-app flow (Spotify, Netflix), and no Foyer RPC unlinks a smart-home partner; the app hands that to the account-linking web flow. Unlink in the Home app, then `devices sync` (verified: Tuya and Yale gone that way) |
 | Apply an audit's expectations in one go | done | `audit --apply`: one `devices move`/`place` per mismatch, unassigned or unplaced row an explicit expectation decided, confirmed once, each read back; rows whose room does not exist are skipped, never created |
 | Rename the home, home address | idea | `StructuresService/UpdateStructure(V2)`; layout not decoded |
 
@@ -30,7 +30,7 @@ not built), **blocked** (needs something we don't have yet), **idea**.
 | Capability | Status | Notes |
 |---|---|---|
 | Announce / broadcast a message to speakers and displays | done (local) | `ghome announce` speaks over the LAN with the Cast protocol and generated speech (`--device`, `--room`, or everywhere; `--url` for any audio; `--volume` restored afterwards), verified live 2026-09-14. The cloud path (`--via cloud`: mesh scope + `OAuthSessionTrait.UpdateToken` + `BroadcastCommand` over native gRPC) stays blocked — Google answers status 13/3 and the mesh client is a runtime-delivered Play-services module |
-| Free-text command to the Assistant ("Ask Home") | planned | `ProcessQuery`; request shape decoded except the required surface-context slot |
+| Free-text command to the Assistant ("Ask Home") | planned | `GenAiHomeAgentService/ProcessQuery`, decoded from 4.28.27.1: `{1: query, 2: enum (the app sends 8), 3: structure id, 4: request uuid, 13: surface context}`; the context is a oneof whose two app-used variants are `{1: enum, 2: string}` and `{1: string, 2: bool, 3: enum}` with an optional capabilities block, and the enum values / which variant the chat screen picks are still unread. Next step: capture the app or web chat, not more decompiling |
 | Device on/off, brightness, colour temperature, colour | done | `devices set`, `rooms set` (`UpdateTraits`); `--color` takes a name, `#rrggbb`, `rgb()` or `hsv()` and writes `color.colorRGB` |
 | Volume / mute, media play-pause-stop | done | `devices set --volume/--mute/--media` (`UpdateTraits`); verified on lights only so far |
 | Full device state read | done | `devices state` (`GetTraits`) |
