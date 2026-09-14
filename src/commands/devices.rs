@@ -276,6 +276,34 @@ fn verify_in_room(
     }
 }
 
+/// Put a device in a room and read the room back. Shared by `devices
+/// move`, `devices place` and `audit --apply`, so the Foyer layout lives
+/// in one place.
+pub(crate) fn move_into_room(
+    ctx: &Ctx,
+    home_id: &str,
+    room_id: &str,
+    device_id: &str,
+) -> Result<(), CliError> {
+    ctx.write(
+        spaces::SPACES,
+        spaces::BATCH_MODIFY_SPACES_DEVICES,
+        &spaces::move_device(room_id, device_id),
+    )?;
+    verify_in_room(ctx, home_id, room_id, device_id)
+}
+
+/// Add a device that is linked to the account but in no home to `home_id`.
+/// The caller reads back (a room listing, or the graph).
+pub(crate) fn add_to_home(ctx: &Ctx, home_id: &str, device_id: &str) -> Result<(), CliError> {
+    ctx.write(
+        spaces::STRUCTURES,
+        spaces::BATCH_MODIFY_STRUCTURES_DEVICES,
+        &spaces::place_device(home_id, device_id),
+    )?;
+    Ok(())
+}
+
 pub fn run(ctx: &Ctx, cmd: &DevicesCmd) -> Result<(), CliError> {
     match cmd {
         DevicesCmd::List(args) => {
@@ -417,12 +445,7 @@ pub fn run(ctx: &Ctx, cmd: &DevicesCmd) -> Result<(), CliError> {
                     target.name
                 ),
             )?;
-            ctx.write(
-                spaces::SPACES,
-                spaces::BATCH_MODIFY_SPACES_DEVICES,
-                &spaces::move_device(&target.id, &d.id),
-            )?;
-            verify_in_room(ctx, &h.id, &target.id, &d.id)?;
+            move_into_room(ctx, &h.id, &target.id, &d.id)?;
             emit_one(
                 ctx.json,
                 "device-move",
@@ -651,18 +674,9 @@ pub fn run(ctx: &Ctx, cmd: &DevicesCmd) -> Result<(), CliError> {
                         .unwrap_or_default()
                 ),
             )?;
-            ctx.write(
-                spaces::STRUCTURES,
-                spaces::BATCH_MODIFY_STRUCTURES_DEVICES,
-                &spaces::place_device(&h.id, &d.id),
-            )?;
+            add_to_home(ctx, &h.id, &d.id)?;
             if let Some(r) = target {
-                ctx.write(
-                    spaces::SPACES,
-                    spaces::BATCH_MODIFY_SPACES_DEVICES,
-                    &spaces::move_device(&r.id, &d.id),
-                )?;
-                verify_in_room(ctx, &h.id, &r.id, &d.id)?;
+                move_into_room(ctx, &h.id, &r.id, &d.id)?;
             } else {
                 let after = ctx.graph()?;
                 let placed = after

@@ -149,6 +149,16 @@ tplc --json rooms devices | ghome audit --expect - --problems    # Tapo rooms
 tplc --json groups devices | ghome audit --expect - --problems   # Kasa groups
 ```
 
+`--apply` turns the audit into the fixes it implies: one `devices move` or
+`devices place` per `mismatch`, `unassigned` or `unplaced` row whose expected
+room came from `--expect` (the name heuristic only ever suggests). It lists
+the changes, asks once (`--force` to skip; required non-interactively), reads
+every move back, and exits 5 if any failed:
+
+```console
+govee --json rooms devices | ghome audit --expect - --apply
+```
+
 ### Raw API
 
 ```console

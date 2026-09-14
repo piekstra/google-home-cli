@@ -180,7 +180,17 @@ fn run(cli: &Cli) -> Result<(), CliError> {
         Command::Audit(args) => {
             // Validate the expectations file before any credential is read.
             let expectations = commands::audit::load_expectations(args.expect.as_deref())?;
-            commands::audit::run(&ctx, args, expectations)
+            commands::audit::validate(args, ctx.interactive)?;
+            let failed = commands::audit::run(&ctx, args, expectations)?;
+            if failed > 0 {
+                // The report is already on stdout; `output::fail` would add a
+                // second document in --json mode, so only the code goes out.
+                let e =
+                    CliError::Upstream(format!("{failed} audit fix(es) failed; see the report"));
+                eprintln!("error: {e}");
+                std::process::exit(e.exit_code());
+            }
+            Ok(())
         }
         Command::Api(args) => {
             let body = commands::api::validate(args)?;

@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use pk_cli_core::CliError;
 
-use crate::homegraph::{Device, Room};
+use crate::homegraph::{Device, Home, Room};
 
 /// One expected placement, as a vendor CLI reports it.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -63,6 +63,17 @@ pub enum Status {
     Unplaced,
 }
 
+/// What decided a finding's expected room.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Source {
+    /// An explicit expectation from `--expect`; the only source `--apply`
+    /// acts on.
+    Expect,
+    /// The device's own name: a hint for a person, never a write.
+    Name,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Finding {
     pub status: Status,
@@ -73,10 +84,8 @@ pub struct Finding {
     pub room: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expected_room: Option<String>,
-    /// `expect` when an explicit expectation decided it, `name` when the
-    /// device's name did.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
+    pub source: Option<Source>,
     /// The vendor behind a matched expectation (`govee`, `tplink`, …), when
     /// its row named one.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -212,7 +221,7 @@ pub fn audit(
         let (expected, source, vendor) = match hit {
             Some((i, e)) => {
                 used[i] = true;
-                (e.room.clone(), Some("expect".to_string()), e.source.clone())
+                (e.room.clone(), Some(Source::Expect), e.source.clone())
             }
             None => (
                 room_from_name(&d.name, d.room.as_deref(), rooms).map(|r| r.name.clone()),
@@ -224,7 +233,7 @@ pub fn audit(
         // own gaps still come first: a room here is what the vendor-side fix
         // gets compared with.
         let unfiled = hit.is_some() && expected.is_none();
-        let source = source.or_else(|| expected.as_ref().map(|_| "name".to_string()));
+        let source = source.or_else(|| expected.as_ref().map(|_| Source::Name));
         let status = match (placed, &d.room, &expected) {
             (false, _, _) => Status::Unplaced,
             (_, None, _) => Status::Unassigned,
@@ -257,7 +266,7 @@ pub fn audit(
                 name: e.name.clone().or_else(|| e.id.clone()).unwrap_or_default(),
                 room: None,
                 expected_room: e.room.clone(),
-                source: Some("expect".into()),
+                source: Some(Source::Expect),
                 vendor: e.source.clone(),
                 partner_device_id: e.id.clone(),
                 home: home_name.map(str::to_string),
@@ -307,6 +316,73 @@ pub fn summarize(findings: &[Finding]) -> Summary {
         }
     }
     s
+}
+
+/// What `audit --apply` does for one finding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Action {
+    /// `devices move`: the device is in the home, in the wrong room or none.
+    Move,
+    /// `devices place`: the device is linked to the account but in no home.
+    Place,
+}
+
+/// One fix the audit can apply: the finding, the room it should end up in,
+/// and why nothing can be done when that room does not exist.
+#[derive(Debug, Clone, Serialize)]
+pub struct Fix {
+    pub action: Action,
+    pub status: Status,
+    pub device_id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room: Option<String>,
+    pub expected_room: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room_id: Option<String>,
+    pub home_id: String,
+    pub home: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<String>,
+}
+
+/// The fixes for one home's findings. Only rows an explicit expectation
+/// decided (`source: expect`) are acted on: the name heuristic is a hint
+/// for a person, not an instruction. A row whose expected room the home
+/// does not have is listed as skipped rather than fixed by creating rooms.
+pub fn plan(findings: &[Finding], home: &Home) -> Vec<Fix> {
+    findings
+        .iter()
+        .filter(|f| f.source == Some(Source::Expect))
+        .filter_map(|f| {
+            let action = match f.status {
+                Status::Mismatch | Status::Unassigned => Action::Move,
+                Status::Unplaced => Action::Place,
+                _ => return None,
+            };
+            let expected = f.expected_room.clone()?;
+            let device_id = f.device_id.clone()?;
+            let target = home
+                .rooms
+                .iter()
+                .find(|r| norm_name(&r.name) == norm_name(&expected));
+            Some(Fix {
+                action,
+                status: f.status,
+                device_id,
+                name: f.name.clone(),
+                room: f.room.clone(),
+                room_id: target.map(|r| r.id.clone()),
+                skipped: target
+                    .is_none()
+                    .then(|| format!("no room named `{expected}` in {}", home.name)),
+                expected_room: expected,
+                home_id: home.id.clone(),
+                home: home.name.clone(),
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -407,7 +483,7 @@ mod tests {
         assert_eq!(f.len(), 4);
         assert_eq!(f[0].status, Status::Mismatch);
         assert_eq!(f[0].expected_room.as_deref(), Some("Office"));
-        assert_eq!(f[0].source.as_deref(), Some("expect"));
+        assert_eq!(f[0].source, Some(Source::Expect));
         assert_eq!(f[1].status, Status::Ok);
         assert!(f[1].expected_room.is_none());
         assert_eq!(f[2].status, Status::Unassigned);
@@ -455,7 +531,7 @@ mod tests {
         let misfiled = device("d1", "Office Lamp", Some("Living Room"), None);
         let f = audit(None, &[&misfiled], &[], &rooms, &[]);
         assert_eq!(f[0].status, Status::Mismatch);
-        assert_eq!(f[0].source.as_deref(), Some("name"));
+        assert_eq!(f[0].source, Some(Source::Name));
     }
 
     #[test]
@@ -513,13 +589,13 @@ mod tests {
         assert_eq!(f[0].status, Status::Unfiled);
         assert!(f[0].expected_room.is_none());
         // `source` stays the closed set; the vendor rides in its own field.
-        assert_eq!(f[0].source.as_deref(), Some("expect"));
+        assert_eq!(f[0].source, Some(Source::Expect));
         assert_eq!(f[0].vendor.as_deref(), Some("govee"));
         // Google's own gap is reported first; the vendor's shows once it is fixed.
         assert_eq!(f[1].status, Status::Unassigned);
         // A vendor row that names no vendor: no made-up provenance.
         assert_eq!(f[2].status, Status::Unfiled);
-        assert_eq!(f[2].source.as_deref(), Some("expect"));
+        assert_eq!(f[2].source, Some(Source::Expect));
         assert!(f[2].vendor.is_none());
         assert_eq!(f[3].status, Status::Unmatched);
         assert!(f[3].expected_room.is_none());
@@ -537,6 +613,65 @@ mod tests {
         let labels: Vec<&str> = s.counts().iter().map(|(l, _)| *l).collect();
         assert_eq!(labels, keys);
         assert!(s.counts().contains(&("unfiled", 2)));
+    }
+
+    #[test]
+    fn apply_plans_only_what_explicit_expectations_decided() {
+        let home = Home {
+            id: "h1".into(),
+            name: "Lakeside".into(),
+            timezone: None,
+            linked_users: vec![],
+            rooms: vec![room("r1", "Office"), room("r2", "Living Room")],
+            devices: vec![],
+        };
+        let finding =
+            |status: Status, source: Source, expected: Option<&str>, id: Option<&str>| Finding {
+                status,
+                device_id: id.map(str::to_string),
+                name: "Lamp".into(),
+                room: Some("Living Room".into()),
+                expected_room: expected.map(str::to_string),
+                source: Some(source),
+                vendor: None,
+                partner_device_id: None,
+                home: Some("Lakeside".into()),
+            };
+        let findings = vec![
+            finding(Status::Mismatch, Source::Expect, Some("office"), Some("d1")),
+            finding(Status::Mismatch, Source::Name, Some("Office"), Some("d2")),
+            finding(
+                Status::Unplaced,
+                Source::Expect,
+                Some("Living Room"),
+                Some("d3"),
+            ),
+            finding(
+                Status::Unassigned,
+                Source::Expect,
+                Some("Attic"),
+                Some("d4"),
+            ),
+            finding(Status::Ok, Source::Expect, None, Some("d5")),
+            finding(Status::Unmatched, Source::Expect, Some("Office"), None),
+        ];
+        let fixes = plan(&findings, &home);
+        let ids: Vec<&str> = fixes.iter().map(|f| f.device_id.as_str()).collect();
+        assert_eq!(ids, ["d1", "d3", "d4"], "{fixes:?}");
+        assert_eq!(fixes[0].action, Action::Move);
+        assert_eq!(
+            fixes[0].room_id.as_deref(),
+            Some("r1"),
+            "matched by name, case-insensitively"
+        );
+        assert_eq!(fixes[1].action, Action::Place);
+        assert_eq!(fixes[1].room_id.as_deref(), Some("r2"));
+        assert_eq!(fixes[2].action, Action::Move);
+        assert!(fixes[2].room_id.is_none());
+        assert_eq!(
+            fixes[2].skipped.as_deref(),
+            Some("no room named `Attic` in Lakeside")
+        );
     }
 
     #[test]
