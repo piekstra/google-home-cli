@@ -52,8 +52,8 @@ not built), **blocked** (needs something we don't have yet), **idea**.
 | Kasa rooms from the cloud (`tplc groups list`) | done | `api.tplinkra.com/v1/device-groups` with the SDK envelope, verified live; this account has no Kasa groups (its rooms are in the Tapo app) |
 | Govee rooms (`govee rooms list`) | done | private app API, email + emailed code (read from Gmail by `gro`); `rooms devices` feeds `ghome audit --expect -`, verified end to end |
 | Govee room writes (`govee rooms move|create|rename|delete`) | done | govee-cli #19; endpoints decoded from Govee Home for Android 7.6.21; verified live 2026-09-10 (room created, seven devices moved, all read back) |
-| Tapo rooms (`tplc rooms list|devices|move|create|rename|delete`) | done (live check pending) | tplink-cloud-cli #3; NBU app-server (`/v1/families`, `/v2/things`, `POST /v1/families/thing-settings`), decoded from Tapo for Android 3.20.753 |
-| Emit `device-rooms/v1` from both for `ghome audit --expect -` | done | `tplc groups devices`, `govee rooms devices` |
+| Tapo rooms (`tplc rooms list|devices|move|create|rename|delete`) | done | tplink-cloud-cli #3 + #4; NBU app-server (`/v1/families`, `/v2/things`, `POST /v1/families/thing-settings`), decoded from Tapo for Android 3.20.753. Verified live 2026-09-10: `tplc --json rooms devices \| ghome audit --expect -` joins the Tapo lock on Google's partner id (the MAC without separators), audit 95 ok |
+| Emit `device-rooms/v1` from both for `ghome audit --expect -` | done | `tplc groups devices`, `tplc rooms devices`, `govee rooms devices`; since govee 0.2.1 / tplc 0.2.1 a device the vendor app files in no room keeps its row with `room` omitted and the audit reports it `unfiled` (verified with a synthetic row, 2026-09-10) |
 
 ## Platform
 
