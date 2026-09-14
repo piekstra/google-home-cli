@@ -31,7 +31,7 @@ not built), **blocked** (needs something we don't have yet), **idea**.
 |---|---|---|
 | Announce / broadcast a message to speakers and displays | blocked | `ghome announce` implements the Play-services recipe (mesh scope + `OAuthSessionTrait.UpdateToken` handshake + `BroadcastCommand` over native gRPC) and Google answers status 13/3; the mesh client is a runtime-delivered native module. Remaining routes: local Cast with generated speech, or `ProcessQuery` text queries |
 | Free-text command to the Assistant ("Ask Home") | planned | `ProcessQuery`; request shape decoded except the required surface-context slot |
-| Device on/off, brightness, colour temperature | done | `devices set`, `rooms set` (`UpdateTraits`); colour (hue/saturation) still planned |
+| Device on/off, brightness, colour temperature, colour | done | `devices set`, `rooms set` (`UpdateTraits`); `--color` takes a name, `#rrggbb`, `rgb()` or `hsv()` and writes `color.colorRGB` |
 | Volume / mute, media play-pause-stop | done | `devices set --volume/--mute/--media` (`UpdateTraits`); verified on lights only so far |
 | Full device state read | done | `devices state` (`GetTraits`) |
 | Lock / unlock with PIN challenge | planned | `UpdateTraits` `lockUnlock`, `pin` on `pinNeeded` |

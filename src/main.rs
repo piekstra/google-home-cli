@@ -4,6 +4,7 @@
 mod announce;
 mod audit;
 mod b64;
+mod color;
 mod commands;
 mod config;
 mod foyer;
