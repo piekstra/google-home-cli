@@ -417,10 +417,10 @@ fn upsert(ctx: &Ctx, home_id: &str, id: Option<&str>, script: &str) -> Result<Ro
     }
 }
 
-/// Returns how many problems `validate` reported (the report is already
-/// out, so `main` turns a nonzero count into the exit code); other
-/// subcommands return 0.
-pub fn run(ctx: &Ctx, cmd: &RoutinesCmd) -> Result<usize, CliError> {
+/// `Ok(Some(error))` is a failure whose report is already on stdout
+/// (`validate` on a rejected script); `main` turns it into the exit code
+/// without a second document. Everything else is `Ok(None)`.
+pub fn run(ctx: &Ctx, cmd: &RoutinesCmd) -> Result<Option<CliError>, CliError> {
     match cmd {
         RoutinesCmd::List(flag) => {
             let items: Vec<Value> = all_routines(ctx, flag)?
@@ -433,7 +433,7 @@ pub fn run(ctx: &Ctx, cmd: &RoutinesCmd) -> Result<usize, CliError> {
                 items,
                 &["name", "runnable", "starters", "home", "id"],
             );
-            Ok(0)
+            Ok(None)
         }
         RoutinesCmd::Run {
             routine,
@@ -466,7 +466,7 @@ pub fn run(ctx: &Ctx, cmd: &RoutinesCmd) -> Result<usize, CliError> {
                 "routine-run",
                 json!({"id": r.id, "name": r.name, "home": home_name, "started": true}),
             );
-            Ok(0)
+            Ok(None)
         }
         RoutinesCmd::Validate { file, home } => {
             let script = load_script(file)?;
@@ -488,7 +488,12 @@ pub fn run(ctx: &Ctx, cmd: &RoutinesCmd) -> Result<usize, CliError> {
                     }
                 }
             });
-            Ok(errors.len())
+            Ok((!valid).then(|| {
+                CliError::Usage(format!(
+                    "Google rejected the script ({} problem(s)); see the report",
+                    errors.len()
+                ))
+            }))
         }
         RoutinesCmd::Create { file, home, force } => {
             let script = load_script(file)?;
@@ -507,7 +512,7 @@ pub fn run(ctx: &Ctx, cmd: &RoutinesCmd) -> Result<usize, CliError> {
             v["created"] = json!(true);
             v["read_back"] = json!("listed");
             emit_one(ctx.json, "routine", v);
-            Ok(0)
+            Ok(None)
         }
         RoutinesCmd::Update {
             routine,
@@ -529,7 +534,7 @@ pub fn run(ctx: &Ctx, cmd: &RoutinesCmd) -> Result<usize, CliError> {
             v["updated"] = json!(true);
             v["read_back"] = json!("listed");
             emit_one(ctx.json, "routine", v);
-            Ok(0)
+            Ok(None)
         }
         RoutinesCmd::Delete {
             routine,
@@ -554,7 +559,7 @@ pub fn run(ctx: &Ctx, cmd: &RoutinesCmd) -> Result<usize, CliError> {
                 "routine-delete",
                 json!({"id": r.id, "name": r.name, "home": home_name, "deleted": true}),
             );
-            Ok(0)
+            Ok(None)
         }
     }
 }

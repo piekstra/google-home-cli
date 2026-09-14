@@ -186,11 +186,8 @@ fn run(cli: &Cli) -> Result<(), CliError> {
         Command::Devices(cmd) => commands::devices::run(&ctx, cmd),
         Command::Agents(cmd) => commands::agents::run(&ctx, cmd),
         Command::Routines(cmd) => {
-            let problems = commands::routines::run(&ctx, cmd)?;
-            if problems > 0 {
-                exit_reported(CliError::Usage(format!(
-                    "Google rejected the script ({problems} problem(s)); see the report"
-                )));
+            if let Some(reported) = commands::routines::run(&ctx, cmd)? {
+                exit_reported(reported);
             }
             Ok(())
         }
