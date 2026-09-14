@@ -125,7 +125,9 @@ Body `[[ [ [id, [agentId, partnerId]], [ [trait, [[field, wrapper], …]], … ]
 one entry per device, several traits per entry. Wrappers: int `[null, n]`,
 string `[null, null, "s"]`, bool `[null, null, null, 0|1]`. Traits and fields
 used: `onOff.onOff` (bool), `brightness.brightness` (int 0–100),
-`color.colorTemperature` (int kelvin), `volume.currentVolume` / `isMuted`,
+`color.colorTemperature` (int kelvin), `color.colorRGB` (int `0xRRGGBB`; the
+read path reports the same field, so `#00ffff` comes back as `65535`),
+`volume.currentVolume` / `isMuted`,
 `mediaState.playbackState` (`playing`/`paused`/`stopped`). The response
 echoes the device with its resulting traits; an immediate `GetTraits` still
 shows the previous state for a second or so, so `ghome` prefers the echo and

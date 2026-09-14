@@ -78,6 +78,7 @@ narrow with `--home <ID|NAME>` or `ghome config set home <NAME>`.
 ghome devices state "Office Hex"                      # online, on, brightness, colour temp, raw traits
 ghome devices set "Office Hex" --off
 ghome devices set "Office Hex" --on --brightness 40 --temp 2700
+ghome devices set "Office Hex" --color teal                 # names, #rrggbb, rgb(), hsv()
 ghome devices set "Kitchen display" --volume 20 --media pause
 ghome rooms set Office --off                          # every light in the room
 ghome rooms set Office --on --all                     # plugs, switches and speakers too
