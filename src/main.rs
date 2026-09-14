@@ -4,6 +4,7 @@
 mod announce;
 mod audit;
 mod b64;
+mod cast;
 mod commands;
 mod config;
 mod foyer;
@@ -175,7 +176,19 @@ fn run(cli: &Cli) -> Result<(), CliError> {
         Command::Devices(cmd) => commands::devices::run(&ctx, cmd),
         Command::Agents(cmd) => commands::agents::run(&ctx, cmd),
         Command::Routines(cmd) => commands::routines::run(&ctx, cmd),
-        Command::Announce(args) => commands::announce::run(&ctx, args),
+        Command::Announce(args) => {
+            let failed = commands::announce::run(&ctx, args)?;
+            if failed > 0 {
+                // The report is already on stdout; `output::fail` would add a
+                // second document in --json mode, so only the code goes out.
+                let e = CliError::Upstream(format!(
+                    "{failed} device(s) did not play the announcement; see the report"
+                ));
+                eprintln!("error: {e}");
+                std::process::exit(e.exit_code());
+            }
+            Ok(())
+        }
         Command::Audit(args) => {
             // Validate the expectations file before any credential is read.
             let expectations = commands::audit::load_expectations(args.expect.as_deref())?;

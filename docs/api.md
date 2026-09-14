@@ -220,6 +220,36 @@ long-lived stream, what the context enum means) stay unknown. Alternatives:
 device/surface context, is required and undecoded), or the local Cast
 protocol to each speaker with generated speech (no Google auth at all).
 
+### What `ghome announce` does today: local Cast
+
+Since 0.6.0 the default is the LAN (`--via local`; `src/cast.rs`), verified
+live 2026-09-14 on a Nest Hub Max:
+
+- Discovery: mDNS `_googlecast._tcp`, TXT `fn` (the name Google Home shows),
+  `id`, `md`. Nest displays answer as `fuchsia-….local`.
+- Transport: TLS to port 8009 — the device presents a self-signed
+  certificate, so verification is off — carrying CastMessage v2: 4-byte
+  big-endian length, then protobuf `{1: protocol_version 0, 2: source_id,
+  3: destination_id, 4: namespace, 5: payload_type 0, 6: payload_utf8}`.
+- Session: `CONNECT` to `receiver-0` (`…tp.connection`) → `GET_STATUS` (to
+  remember the volume) → optional `SET_VOLUME` → `LAUNCH CC1AD845` (the
+  Default Media Receiver) → the `RECEIVER_STATUS` carrying that app's
+  `transportId` → `CONNECT` to it → `LOAD {contentId, contentType
+  audio/mpeg, streamType BUFFERED}` on `…cast.media` → `MEDIA_STATUS` until
+  `playerState` is `IDLE` (`idleReason FINISHED`) → restore the volume →
+  `STOP {sessionId}` so a display returns to its ambient screen → `CLOSE`.
+  Heartbeat `PING`s are answered with `PONG` whenever they arrive.
+- Speech: `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=<lang>&q=<text>`,
+  which the device fetches itself. Unofficial; 200-character limit.
+
+**Traps.** The receiver also chats on `…cast.multizone` and sends
+unsolicited `RECEIVER_STATUS`/`MEDIA_STATUS` with `requestId: 0`; match
+replies by namespace and content, not by order. The first `MEDIA_STATUS`
+after `LOAD` has an empty `status` list, then `IDLE`, then `BUFFERING`,
+then `PLAYING`: wait for `PLAYING`/`BUFFERING` before waiting for `IDLE`,
+or the initial `IDLE` looks like "finished". A `LOAD_FAILED` means the
+device could not fetch the audio (usually no internet on its side).
+
 ## Why fixing the vendor apps is not enough
 
 Every vendor's Google integration may send a `roomHint` when it SYNCs a
