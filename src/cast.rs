@@ -25,6 +25,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use bytes::BytesMut;
 use pk_cli_core::CliError;
 use serde_json::{json, Value};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -335,11 +336,17 @@ impl rustls::client::danger::ServerCertVerifier for AcceptAny {
 
 type Tls = tokio_rustls::client::TlsStream<tokio::net::TcpStream>;
 
-/// One Cast connection: the message pump over any async stream.
+/// One Cast connection: the message pump over any async stream. Reads go
+/// through `buf`, so a `recv` cancelled by a deadline keeps the bytes it
+/// already has and the next call picks the frame up where it was left;
+/// heartbeats are answered outside any deadline for the same reason.
 pub struct Conn<S> {
     stream: S,
+    buf: BytesMut,
     verbose: bool,
     request_id: u64,
+    reply_timeout: Duration,
+    playback_timeout: Duration,
 }
 
 impl Conn<Tls> {
@@ -372,8 +379,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
     pub fn new(stream: S, verbose: bool) -> Conn<S> {
         Conn {
             stream,
+            buf: BytesMut::with_capacity(8 * 1024),
             verbose,
             request_id: 0,
+            reply_timeout: REPLY_TIMEOUT,
+            playback_timeout: PLAYBACK_TIMEOUT,
         }
     }
 
@@ -396,45 +406,43 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
             .map_err(|e| CastError::Protocol(format!("send: {e}")))
     }
 
-    /// The next message, answering heartbeats along the way.
+    /// The next whole message. Cancel-safe: `read_buf` keeps what it read.
     async fn recv(&mut self) -> Result<Message, CastError> {
         loop {
-            let mut len = [0u8; 4];
-            self.stream
-                .read_exact(&mut len)
-                .await
-                .map_err(|e| CastError::Protocol(format!("read: {e}")))?;
-            let n = u32::from_be_bytes(len) as usize;
-            if n > 1 << 20 {
-                return Err(CastError::Protocol(format!(
-                    "frame of {n} bytes is not a Cast message"
-                )));
-            }
-            let mut body = vec![0u8; n];
-            self.stream
-                .read_exact(&mut body)
-                .await
-                .map_err(|e| CastError::Protocol(format!("read: {e}")))?;
-            let Some(m) = decode(&body) else {
-                return Err(CastError::Protocol("undecodable Cast message".into()));
-            };
-            if self.verbose {
-                eprintln!(
-                    "cast ← {} {}: {}",
-                    m.source,
-                    m.namespace.rsplit('.').next().unwrap_or(&m.namespace),
-                    m.payload.chars().take(200).collect::<String>()
-                );
-            }
-            if m.namespace == NS_HEARTBEAT {
-                if m.payload.contains("PING") {
-                    let src = m.source.clone();
-                    self.send(&src, NS_HEARTBEAT, &json!({"type": "PONG"}))
-                        .await?;
+            if self.buf.len() >= 4 {
+                let n = u32::from_be_bytes([self.buf[0], self.buf[1], self.buf[2], self.buf[3]])
+                    as usize;
+                if n > 1 << 20 {
+                    return Err(CastError::Protocol(format!(
+                        "frame of {n} bytes is not a Cast message"
+                    )));
                 }
-                continue;
+                if self.buf.len() >= 4 + n {
+                    let frame = self.buf.split_to(4 + n);
+                    let Some(m) = decode(&frame[4..]) else {
+                        return Err(CastError::Protocol("undecodable Cast message".into()));
+                    };
+                    if self.verbose {
+                        eprintln!(
+                            "cast ← {} {}: {}",
+                            m.source,
+                            m.namespace.rsplit('.').next().unwrap_or(&m.namespace),
+                            m.payload.chars().take(200).collect::<String>()
+                        );
+                    }
+                    return Ok(m);
+                }
             }
-            return Ok(m);
+            let read = self
+                .stream
+                .read_buf(&mut self.buf)
+                .await
+                .map_err(|e| CastError::Protocol(format!("read: {e}")))?;
+            if read == 0 {
+                return Err(CastError::Protocol(
+                    "the device closed the connection".into(),
+                ));
+            }
         }
     }
 
@@ -455,6 +463,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
             let m = tokio::time::timeout(left, self.recv())
                 .await
                 .map_err(|_| CastError::Timeout(what.to_string()))??;
+            if m.namespace == NS_HEARTBEAT {
+                if m.payload.contains("PING") {
+                    let src = m.source.clone();
+                    self.send(&src, NS_HEARTBEAT, &json!({"type": "PONG"}))
+                        .await?;
+                }
+                continue;
+            }
             if m.namespace != ns {
                 continue;
             }
@@ -472,8 +488,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Conn<S> {
         let id = self.next_id();
         payload["requestId"] = json!(id);
         let what = format!("the reply to {}", msg_type(&payload));
+        let limit = self.reply_timeout;
         self.send(RECEIVER, NS_RECEIVER, &payload).await?;
-        self.wait_for(NS_RECEIVER, &what, REPLY_TIMEOUT, |v| {
+        self.wait_for(NS_RECEIVER, &what, limit, |v| {
             v.get("requestId").and_then(Value::as_u64) == Some(id)
         })
         .await
@@ -501,6 +518,23 @@ pub struct Outcome {
     /// the announcement itself still played.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+}
+
+impl Outcome {
+    /// The row for a device whose task ended without producing one (it
+    /// panicked); `error_kind` is `internal`.
+    pub fn internal(dev: &CastDevice, what: String) -> Outcome {
+        Outcome {
+            name: dev.name.clone(),
+            model: dev.model.clone(),
+            ip: dev.ip.to_string(),
+            played: false,
+            final_state: None,
+            error: Some(format!("internal error: {what}")),
+            error_kind: Some("internal"),
+            warnings: Vec::new(),
+        }
+    }
 }
 
 /// Play `url` on `dev` and wait for it to finish. `volume`, when given, is
@@ -619,11 +653,12 @@ async fn playback<S: AsyncRead + AsyncWrite + Unpin>(
         &json!({"type": "LAUNCH", "requestId": launch_id, "appId": DEFAULT_MEDIA_RECEIVER}),
     )
     .await?;
+    let (reply_limit, playback_limit) = (c.reply_timeout, c.playback_timeout);
     let launched = c
         .wait_for(
             NS_RECEIVER,
             "the media receiver to launch",
-            REPLY_TIMEOUT,
+            reply_limit,
             |v| msg_type(v) == "LAUNCH_ERROR" || transport_id(v).is_some(),
         )
         .await?;
@@ -666,7 +701,7 @@ async fn playback<S: AsyncRead + AsyncWrite + Unpin>(
     // empty and the next is a plain IDLE, so "stopped" is only meaningful
     // after "playing".
     let started = c
-        .wait_for(NS_MEDIA, "playback to start", REPLY_TIMEOUT, |v| {
+        .wait_for(NS_MEDIA, "playback to start", reply_limit, |v| {
             let t = msg_type(v);
             t == "LOAD_FAILED"
                 || t == "LOAD_CANCELLED"
@@ -677,7 +712,7 @@ async fn playback<S: AsyncRead + AsyncWrite + Unpin>(
         return Err(CastError::LoadFailed(msg_type(&started).to_string()));
     }
     let done = c
-        .wait_for(NS_MEDIA, "playback to finish", PLAYBACK_TIMEOUT, |v| {
+        .wait_for(NS_MEDIA, "playback to finish", playback_limit, |v| {
             player_state(v).is_some_and(|(s, _)| s == "IDLE")
         })
         .await?;
@@ -736,6 +771,9 @@ mod tests {
     struct Script {
         refuse_launch: bool,
         load: &'static str, // "finished" | "cancelled" | "load_failed"
+        /// Deliver the first RECEIVER_STATUS in two halves with a pause
+        /// between, longer than the sender's reply timeout.
+        stall_first_status: bool,
     }
 
     /// The other end of the pipe: a Cast receiver that answers like a Nest
@@ -747,6 +785,7 @@ mod tests {
         log: Arc<Mutex<Vec<String>>>,
     ) {
         let mut pinged = false;
+        let mut stalled = false;
         loop {
             let mut len = [0u8; 4];
             if s.read_exact(&mut len).await.is_err() {
@@ -835,9 +874,16 @@ mod tests {
             // A reply the sender no longer reads (it may have hung up after
             // its last frame) is not this device's problem.
             for (src, ns, payload) in replies {
-                let _ = s
-                    .write_all(&encode(src, SENDER, ns, &payload.to_string()))
-                    .await;
+                let frame = encode(src, SENDER, ns, &payload.to_string());
+                if script.stall_first_status && !stalled && msg_type(&payload) == "RECEIVER_STATUS"
+                {
+                    stalled = true;
+                    let _ = s.write_all(&frame[..3]).await;
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    let _ = s.write_all(&frame[3..]).await;
+                    continue;
+                }
+                let _ = s.write_all(&frame).await;
             }
         }
     }
@@ -873,6 +919,7 @@ mod tests {
             Script {
                 refuse_launch: false,
                 load: "finished",
+                stall_first_status: false,
             },
             Some(30),
         );
@@ -906,6 +953,7 @@ mod tests {
             Script {
                 refuse_launch: false,
                 load: "load_failed",
+                stall_first_status: false,
             },
             Some(80),
         );
@@ -922,6 +970,7 @@ mod tests {
             Script {
                 refuse_launch: true,
                 load: "finished",
+                stall_first_status: false,
             },
             Some(50),
         );
@@ -937,6 +986,7 @@ mod tests {
             Script {
                 refuse_launch: false,
                 load: "cancelled",
+                stall_first_status: false,
             },
             None,
         );
@@ -944,5 +994,41 @@ mod tests {
         assert_eq!(count(&log, "receiver-0:SET_VOLUME"), 0, "{log:?}");
         assert_eq!(count(&log, "receiver-0:STOP"), 1, "{log:?}");
         assert_eq!(CastError::Playback("x".into()).kind(), "playback");
+    }
+
+    #[test]
+    fn a_deadline_mid_frame_does_not_desync_the_stream() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (ours, theirs) = tokio::io::duplex(64 * 1024);
+            let log = Arc::new(Mutex::new(Vec::new()));
+            let script = Script {
+                refuse_launch: false,
+                load: "finished",
+                stall_first_status: true,
+            };
+            let device = tokio::spawn(fake_device(theirs, script, log.clone()));
+            let mut c = Conn::new(ours, false);
+            c.reply_timeout = Duration::from_millis(100);
+            let first = c.receiver_request(json!({"type": "GET_STATUS"})).await;
+            assert!(matches!(first, Err(CastError::Timeout(_))), "{first:?}");
+            // The late half of the first reply is still read as one frame,
+            // skipped (wrong request id), and the second reply matched. The
+            // stall outlasts the first deadline, so give the second one room.
+            c.reply_timeout = Duration::from_secs(5);
+            let second = c
+                .receiver_request(json!({"type": "GET_STATUS"}))
+                .await
+                .expect("the pump resynced");
+            assert_eq!(volume_level(&second), Some(0.5));
+            c.send(RECEIVER, NS_CONNECTION, &json!({"type": "CLOSE"}))
+                .await
+                .unwrap();
+            drop(c);
+            let _ = device.await;
+        });
     }
 }

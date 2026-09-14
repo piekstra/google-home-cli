@@ -247,7 +247,11 @@ live 2026-09-14 on a Nest Hub Max:
   volume may have changed; anything that fails there is a `warning` on the
   device's row, not a failed announcement. `IDLE` with `CANCELLED`,
   `INTERRUPTED` or `ERROR` is reported as not played (`error_kind`
-  `playback`); the device plays every target concurrently.
+  `playback`); every target plays concurrently. Deadlines only ever cancel
+  a read between bytes the pump has already buffered, so a timed-out wait
+  leaves the connection in sync for the cleanup that follows. A device
+  that stalls fetching the speech (seen once on a longer sentence) shows
+  as a `timeout` waiting for playback to finish; the cleanup still runs.
 
 **Traps.** The receiver also chats on `…cast.multizone` and sends
 unsolicited `RECEIVER_STATUS`/`MEDIA_STATUS` with `requestId: 0`; match

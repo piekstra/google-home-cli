@@ -168,10 +168,24 @@ fn run_local(ctx: &Ctx, args: &AnnounceArgs) -> Result<usize, CliError> {
             let (volume, verbose) = (args.volume, ctx.verbose);
             set.spawn(async move { (i, cast::play(&d, &url, &title, volume, verbose).await) });
         }
-        let mut done = Vec::new();
+        let mut done: Vec<(usize, cast::Outcome)> = Vec::new();
+        let mut crashed = Vec::new();
         while let Some(r) = set.join_next().await {
-            if let Ok(x) = r {
-                done.push(x);
+            match r {
+                Ok(x) => done.push(x),
+                Err(e) => crashed.push(e.to_string()),
+            }
+        }
+        // A task that panicked left no outcome; its device gets one rather
+        // than vanishing from the report.
+        let seen: std::collections::HashSet<usize> = done.iter().map(|(i, _)| *i).collect();
+        let mut why = crashed.into_iter();
+        for (i, d) in targets.iter().enumerate() {
+            if !seen.contains(&i) {
+                let what = why
+                    .next()
+                    .unwrap_or_else(|| "task ended without a result".into());
+                done.push((i, cast::Outcome::internal(d, what)));
             }
         }
         done.sort_by_key(|(i, _)| *i);
