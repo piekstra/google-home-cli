@@ -72,7 +72,7 @@ enum Command {
     /// Partner integrations (Govee, Kasa, …) linked to the account.
     #[command(subcommand)]
     Agents(AgentsCmd),
-    /// Routines and automations: list, run.
+    /// Routines and automations: list, run, validate, create, update, delete.
     #[command(subcommand)]
     Routines(RoutinesCmd),
     /// Speak a message on the home's speakers and displays (announce/v1).
@@ -185,7 +185,12 @@ fn run(cli: &Cli) -> Result<(), CliError> {
         Command::Rooms(cmd) => commands::rooms::run(&ctx, cmd),
         Command::Devices(cmd) => commands::devices::run(&ctx, cmd),
         Command::Agents(cmd) => commands::agents::run(&ctx, cmd),
-        Command::Routines(cmd) => commands::routines::run(&ctx, cmd),
+        Command::Routines(cmd) => {
+            if let Some(reported) = commands::routines::run(&ctx, cmd)? {
+                exit_reported(reported);
+            }
+            Ok(())
+        }
         Command::Announce(args) => {
             let failed = commands::announce::run(&ctx, args)?;
             if failed > 0 {

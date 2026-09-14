@@ -138,7 +138,45 @@ otherwise waits before reading. Verified live 2026-09-09 (on/off).
 `ListAutomations` `["<structure>"]` → `[[ [id, ?, manuallyRunnable(0|1),
 name, starters, actions, …], … ]]`; `ExecuteAutomation` `["<structure>",
 "<automation>", null, 2]` → `["1"]` on success. Google's own Home/Away
-appear here (ids `structure_<id>.sbr_00N`) as not manually runnable.
+appear here (ids `structure_<id>.sbr_00N`) as not manually runnable; the
+legacy Assistant routines carry `assistant-settings://` deep links and are
+edited elsewhere.
+
+### Script automations — captured from the web editor (2026-09-14)
+
+The Android app cannot help here: it creates automations through the
+Home-platform trait `AutomationManagementTrait.CreateAutomationCommand`
+(a structured node graph) over the Play-services mesh channel that
+rejects a bare client. The first-party client that saves the script
+editor's YAML directly is home.google.com/automations, which speaks this
+same Foyer JSON gateway; these bodies were read off its wire with Chrome's
+debugging port while a script was validated, saved and deleted.
+
+The automation object is positional: `id` at 1 (absent when creating),
+`status {is_enabled}` at 8 (`[[1]]`), kind `2` (a script) at 9,
+`script_details {content}` at 15 (`["<yaml>"]`).
+
+| RPC | body | reply |
+|---|---|---|
+| `ValidateAutomation` | `["<structure>", [null×8, 2, null×5, ["<yaml>"]]]` | `[]` when fine |
+| `UpsertAutomation` | `["<structure>", [<id or null>, null×6, [[1]], 2, null×5, ["<yaml>"]], [["script_details.content", "status.is_enabled"]]]` | the new list row (`[id, null, 1, name, "1 starter", "1 action", …]`) |
+| `DeleteAutomation` | `["<structure>", "<automation>"]` | `[]` |
+
+A rejected script answers `[[[line, column, message, severity], …]]`, the
+message with a little HTML (`<br>`, `&#39;`). **Traps.** Validating a
+replacement must carry the automation's `id` at 1, or Google reports the
+automation's own name and voice phrase as already in use. Once, a first
+validation came back with "invalid device name … valid device names: []"
+for a device that exists; the same script passed two seconds later, so
+`ghome` retries once when the valid-device list is empty.
+
+The editor also calls `ListAutomationHints ["<structure>"]`, which lists
+every device as the `"Name - Room"` entity the YAML refers to, with its
+traits. Verified live 2026-09-14: a script with an `assistant.event.OkGoogle`
+starter and a `device.command.ColorAbsolute` action was created, run through
+`ExecuteAutomation` (the light changed colour), and deleted, from `ghome`.
+Samples: `~/Dev/decompiled/google-home/4.28.27.1/web-automation-captures.jsonl`
+(local only).
 
 ## Writing rooms — decoded from the app, verified live
 

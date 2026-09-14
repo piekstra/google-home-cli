@@ -93,7 +93,18 @@ so "turn off the bedroom" never cuts a plug you'd rather keep on.
 ```console
 ghome routines list                                   # which can be run on demand
 ghome routines run "Good night"                       # prompts; --force to skip
+ghome routines validate --file morning.yaml           # Google's own validator, nothing saved
+ghome routines create --file morning.yaml             # validated, then saved; prompts
+ghome routines update "Morning" --file morning.yaml   # replace its script
+ghome routines delete "Morning"
 ```
+
+Scripts are the Home script editor's YAML (`metadata` + `automations` with
+`starters` and `actions`; devices as `"Name - Room"`), so anything the
+editor at home.google.com/automations accepts works here, `--file -` reads
+stdin, and a created automation shows up in the app and can be run with
+`routines run`. A rejected script lists Google's problems as `line:col
+message` (rows under `errors` in `--json`) and exits 2.
 
 ### Announcements
 
