@@ -91,8 +91,8 @@ pub enum DevicesCmd {
     },
     /// Ask Google to re-sync every linked vendor ("sync my devices").
     Sync,
-    /// Current state: online, on/off, brightness, colour temperature, volume,
-    /// playback, plus every raw trait (device-state/v1).
+    /// Current state: online, on/off, brightness, colour temperature, colour,
+    /// volume, playback, plus every raw trait (device-state/v1).
     State {
         /// Device id, exact name, or unique partial name.
         device: String,
@@ -138,8 +138,12 @@ pub struct ChangeArgs {
     #[arg(long, value_name = "PCT", value_parser = clap::value_parser!(u8).range(0..=100))]
     pub brightness: Option<u8>,
     /// Colour temperature in kelvin, e.g. 2700 (warm) to 6500 (cool).
-    #[arg(long, value_name = "KELVIN", value_parser = clap::value_parser!(u32).range(1000..=10000))]
+    #[arg(long, value_name = "KELVIN", value_parser = clap::value_parser!(u32).range(1000..=10000), conflicts_with = "color")]
     pub temp: Option<u32>,
+    /// Colour: a name (red, teal, warm white, …), `#rrggbb`, `rgb(r,g,b)`
+    /// or `hsv(hue,sat[,val])`.
+    #[arg(long, value_name = "COLOUR", visible_alias = "colour")]
+    pub color: Option<String>,
     /// Volume 0–100.
     #[arg(long, value_name = "PCT", value_parser = clap::value_parser!(u8).range(0..=100))]
     pub volume: Option<u8>,
@@ -170,6 +174,12 @@ impl ChangeArgs {
             },
             brightness: self.brightness,
             color_temperature_k: self.temp,
+            color_rgb: self
+                .color
+                .as_deref()
+                .map(crate::color::parse_color)
+                .transpose()
+                .map_err(CliError::Usage)?,
             volume: self.volume,
             muted: if self.mute {
                 Some(true)
@@ -182,7 +192,7 @@ impl ChangeArgs {
         };
         if c.is_empty() {
             return Err(CliError::Usage(
-                "nothing to change: pass --on/--off, --brightness, --temp, --volume, --mute/--unmute or --media".into(),
+                "nothing to change: pass --on/--off, --brightness, --temp, --color, --volume, --mute/--unmute or --media".into(),
             ));
         }
         Ok(c)
@@ -264,6 +274,34 @@ fn verify_in_room(
             "Google accepted the write but the room does not list the device on read-back".into(),
         )),
     }
+}
+
+/// Put a device in a room and read the room back. Shared by `devices
+/// move`, `devices place` and `audit --apply`, so the Foyer layout lives
+/// in one place.
+pub(crate) fn move_into_room(
+    ctx: &Ctx,
+    home_id: &str,
+    room_id: &str,
+    device_id: &str,
+) -> Result<(), CliError> {
+    ctx.write(
+        spaces::SPACES,
+        spaces::BATCH_MODIFY_SPACES_DEVICES,
+        &spaces::move_device(room_id, device_id),
+    )?;
+    verify_in_room(ctx, home_id, room_id, device_id)
+}
+
+/// Add a device that is linked to the account but in no home to `home_id`.
+/// The caller reads back (a room listing, or the graph).
+pub(crate) fn add_to_home(ctx: &Ctx, home_id: &str, device_id: &str) -> Result<(), CliError> {
+    ctx.write(
+        spaces::STRUCTURES,
+        spaces::BATCH_MODIFY_STRUCTURES_DEVICES,
+        &spaces::place_device(home_id, device_id),
+    )?;
+    Ok(())
 }
 
 pub fn run(ctx: &Ctx, cmd: &DevicesCmd) -> Result<(), CliError> {
@@ -407,12 +445,7 @@ pub fn run(ctx: &Ctx, cmd: &DevicesCmd) -> Result<(), CliError> {
                     target.name
                 ),
             )?;
-            ctx.write(
-                spaces::SPACES,
-                spaces::BATCH_MODIFY_SPACES_DEVICES,
-                &spaces::move_device(&target.id, &d.id),
-            )?;
-            verify_in_room(ctx, &h.id, &target.id, &d.id)?;
+            move_into_room(ctx, &h.id, &target.id, &d.id)?;
             emit_one(
                 ctx.json,
                 "device-move",
@@ -641,18 +674,9 @@ pub fn run(ctx: &Ctx, cmd: &DevicesCmd) -> Result<(), CliError> {
                         .unwrap_or_default()
                 ),
             )?;
-            ctx.write(
-                spaces::STRUCTURES,
-                spaces::BATCH_MODIFY_STRUCTURES_DEVICES,
-                &spaces::place_device(&h.id, &d.id),
-            )?;
+            add_to_home(ctx, &h.id, &d.id)?;
             if let Some(r) = target {
-                ctx.write(
-                    spaces::SPACES,
-                    spaces::BATCH_MODIFY_SPACES_DEVICES,
-                    &spaces::move_device(&r.id, &d.id),
-                )?;
-                verify_in_room(ctx, &h.id, &r.id, &d.id)?;
+                move_into_room(ctx, &h.id, &r.id, &d.id)?;
             } else {
                 let after = ctx.graph()?;
                 let placed = after

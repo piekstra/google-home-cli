@@ -81,6 +81,9 @@ pub fn summarize(id: &str, name: &str, traits: &Value) -> Value {
     if let Some(k) = get("color", "colorTemperature") {
         v.insert("color_temperature_k".into(), k);
     }
+    if let Some(c) = get("color", "colorRGB").and_then(|c| c.as_u64()) {
+        v.insert("color".into(), json!(format!("#{:06x}", c & 0xff_ffff)));
+    }
     if let Some(x) = get("volume", "currentVolume") {
         v.insert("volume".into(), x);
     }
@@ -117,6 +120,8 @@ pub struct Change {
     pub on: Option<bool>,
     pub brightness: Option<u8>,
     pub color_temperature_k: Option<u32>,
+    /// `0xRRGGBB`, the `color.colorRGB` field Google reads and writes.
+    pub color_rgb: Option<u32>,
     pub volume: Option<u8>,
     pub muted: Option<bool>,
     pub playback: Option<String>,
@@ -143,6 +148,9 @@ impl Change {
         if let Some(k) = self.color_temperature_k {
             parts.push(format!("{k}K"));
         }
+        if let Some(c) = self.color_rgb {
+            parts.push(format!("colour #{c:06x}"));
+        }
         if let Some(v) = self.volume {
             parts.push(format!("volume {v}"));
         }
@@ -163,11 +171,15 @@ impl Change {
         if let Some(b) = self.brightness {
             t.push(json!(["brightness", [["brightness", int_w(i64::from(b))]]]));
         }
+        let mut color = Vec::new();
         if let Some(k) = self.color_temperature_k {
-            t.push(json!([
-                "color",
-                [["colorTemperature", int_w(i64::from(k))]]
-            ]));
+            color.push(json!(["colorTemperature", int_w(i64::from(k))]));
+        }
+        if let Some(c) = self.color_rgb {
+            color.push(json!(["colorRGB", int_w(i64::from(c))]));
+        }
+        if !color.is_empty() {
+            t.push(json!(["color", color]));
         }
         let mut vol = Vec::new();
         if let Some(v) = self.volume {
@@ -212,7 +224,8 @@ pub fn supports(d: &Device, change: &Change) -> bool {
     let has = |suffix: &str| d.traits.iter().any(|t| t.ends_with(suffix));
     (change.on.is_none() || has("OnOff"))
         && (change.brightness.is_none() || has("Brightness"))
-        && (change.color_temperature_k.is_none() || has("ColorSetting"))
+        && (change.color_temperature_k.is_none() && change.color_rgb.is_none()
+            || has("ColorSetting"))
         && (change.volume.is_none() && change.muted.is_none() || has("Volume"))
         && (change.playback.is_none() || has("TransportControl") || has("MediaState"))
 }
@@ -256,6 +269,9 @@ mod tests {
         assert_eq!(s["on"], false);
         assert_eq!(s["brightness"], 40);
         assert_eq!(s["playback"], "paused");
+        let raw = json!([[[["d2"], [["color", [["colorRGB", [null, 65535]]]]]]]]);
+        let s = summarize("d2", "Hex", &parse_states(&raw)["d2"]);
+        assert_eq!(s["color"], "#00ffff");
     }
 
     #[test]
@@ -285,6 +301,25 @@ mod tests {
         );
         assert_eq!(change.describe(), "on, brightness 75");
         assert!(supports(&d, &change));
+        let colour = Change {
+            color_rgb: Some(0x00ff80),
+            ..Default::default()
+        };
+        assert!(!supports(&d, &colour), "no ColorSetting trait");
+        let lamp = dev("d2", &["OnOff", "ColorSetting"]);
+        assert!(supports(&lamp, &colour));
+        assert_eq!(
+            update_traits(&[&lamp], &colour)[0][0][1][0],
+            json!(["color", [["colorRGB", [null, 0x00ff80]]]])
+        );
+        assert_eq!(colour.describe(), "colour #00ff80");
+        // Temperature and colour share the one `color` trait entry.
+        let both = Change {
+            color_temperature_k: Some(2700),
+            color_rgb: Some(0xff0000),
+            ..Default::default()
+        };
+        assert_eq!(both.traits()[0][1].as_array().unwrap().len(), 2);
         assert!(!supports(
             &d,
             &Change {

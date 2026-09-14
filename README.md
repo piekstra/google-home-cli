@@ -78,6 +78,7 @@ narrow with `--home <ID|NAME>` or `ghome config set home <NAME>`.
 ghome devices state "Office Hex"                      # online, on, brightness, colour temp, raw traits
 ghome devices set "Office Hex" --off
 ghome devices set "Office Hex" --on --brightness 40 --temp 2700
+ghome devices set "Office Hex" --color teal                 # names, #rrggbb, rgb(), hsv()
 ghome devices set "Kitchen display" --volume 20 --media pause
 ghome rooms set Office --off                          # every light in the room
 ghome rooms set Office --on --all                     # plugs, switches and speakers too
@@ -162,6 +163,16 @@ The vendor CLIs emit this shape directly:
 govee --json rooms devices | ghome audit --expect - --problems
 tplc --json rooms devices | ghome audit --expect - --problems    # Tapo rooms
 tplc --json groups devices | ghome audit --expect - --problems   # Kasa groups
+```
+
+`--apply` turns the audit into the fixes it implies: one `devices move` or
+`devices place` per `mismatch`, `unassigned` or `unplaced` row whose expected
+room came from `--expect` (the name heuristic only ever suggests). It lists
+the changes, asks once (`--force` to skip; required non-interactively), reads
+every move back, and exits 5 if any failed:
+
+```console
+govee --json rooms devices | ghome audit --expect - --apply
 ```
 
 ### Raw API

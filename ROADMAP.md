@@ -22,7 +22,7 @@ not built), **blocked** (needs something we don't have yet), **idea**.
 | Remove a device from Google Home | done | `devices remove` (`DeleteDevice`); confirmed: a vendor re-sync (`devices sync`) brings a still-listed device back as unplaced, so delete it at the vendor too |
 | Ask every vendor to re-sync | done | `devices sync` |
 | Unlink a vendor integration | blocked | `SetupService/UnlinkApplication` decoded, but its "linkable app id" is not the agent id and no read exposes it yet. Unlinking in the Home app works and is what finally removes a vendor's dead devices (verified: Tuya and Yale gone after unlink + `devices sync`) |
-| Apply an audit's expectations in one go | idea | `audit --apply` = one `devices move`/`place` per mismatch, confirmed once |
+| Apply an audit's expectations in one go | done | `audit --apply`: one `devices move`/`place` per mismatch, unassigned or unplaced row an explicit expectation decided, confirmed once, each read back; rows whose room does not exist are skipped, never created |
 | Rename the home, home address | idea | `StructuresService/UpdateStructure(V2)`; layout not decoded |
 
 ## Control and state
@@ -31,7 +31,7 @@ not built), **blocked** (needs something we don't have yet), **idea**.
 |---|---|---|
 | Announce / broadcast a message to speakers and displays | done (local) | `ghome announce` speaks over the LAN with the Cast protocol and generated speech (`--device`, `--room`, or everywhere; `--url` for any audio; `--volume` restored afterwards), verified live 2026-09-14. The cloud path (`--via cloud`: mesh scope + `OAuthSessionTrait.UpdateToken` + `BroadcastCommand` over native gRPC) stays blocked — Google answers status 13/3 and the mesh client is a runtime-delivered Play-services module |
 | Free-text command to the Assistant ("Ask Home") | planned | `ProcessQuery`; request shape decoded except the required surface-context slot |
-| Device on/off, brightness, colour temperature | done | `devices set`, `rooms set` (`UpdateTraits`); colour (hue/saturation) still planned |
+| Device on/off, brightness, colour temperature, colour | done | `devices set`, `rooms set` (`UpdateTraits`); `--color` takes a name, `#rrggbb`, `rgb()` or `hsv()` and writes `color.colorRGB` |
 | Volume / mute, media play-pause-stop | done | `devices set --volume/--mute/--media` (`UpdateTraits`); verified on lights only so far |
 | Full device state read | done | `devices state` (`GetTraits`) |
 | Lock / unlock with PIN challenge | planned | `UpdateTraits` `lockUnlock`, `pin` on `pinNeeded` |
