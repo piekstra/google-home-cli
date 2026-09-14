@@ -38,6 +38,14 @@ pub enum RoutinesCmd {
         #[arg(long)]
         force: bool,
     },
+    /// One routine with its script, when it is a script automation
+    /// (routine/v1). Legacy Assistant routines have no script here.
+    Get {
+        /// Routine id, exact name, or unique partial name.
+        routine: String,
+        #[command(flatten)]
+        home: HomeFlag,
+    },
     /// Check a script against Google's validator without saving it
     /// (routine-validate/v1). The script is the Home script editor's YAML.
     Validate {
@@ -93,13 +101,18 @@ pub struct Routine {
     pub manual: bool,
     pub starters: Option<String>,
     pub actions: Option<String>,
+    /// The script editor's YAML, for script automations (row index 14).
+    pub script: Option<String>,
+    /// `metadata.description` of a script automation (row index 26).
+    pub description: Option<String>,
 }
 
 fn at(v: &Value, i: usize) -> &Value {
     v.get(i).unwrap_or(&Value::Null)
 }
 
-/// One automation row: `[id, ?, manuallyRunnable, name, starters, actions, …]`.
+/// One automation row: `[id, ?, manuallyRunnable, name, starters, actions,
+/// …, 14: [script], …, 26: description]`.
 pub fn parse_row(r: &Value) -> Option<Routine> {
     Some(Routine {
         id: at(r, 0).as_str()?.to_string(),
@@ -107,6 +120,8 @@ pub fn parse_row(r: &Value) -> Option<Routine> {
         manual: at(r, 2).as_i64() == Some(1),
         starters: at(r, 4).as_str().map(str::to_string),
         actions: at(r, 5).as_str().map(str::to_string),
+        script: at(at(r, 14), 0).as_str().map(str::to_string),
+        description: at(r, 26).as_str().map(str::to_string),
     })
 }
 
@@ -466,6 +481,37 @@ pub fn run(ctx: &Ctx, cmd: &RoutinesCmd) -> Result<Option<CliError>, CliError> {
                 "routine-run",
                 json!({"id": r.id, "name": r.name, "home": home_name, "started": true}),
             );
+            Ok(None)
+        }
+        RoutinesCmd::Get { routine, home } => {
+            let (r, _, home_name) = find(ctx, home, routine)?;
+            let mut v = row(&r, &home_name);
+            v["kind"] = json!(if r.script.is_some() {
+                "script"
+            } else {
+                "assistant"
+            });
+            v["description"] = json!(r.description);
+            v["script"] = json!(r.script);
+            output::emit(ctx.json, "routine", v, |v| {
+                println!("{} ({})", r.name, home_name);
+                if let Some(d) = &r.description {
+                    println!("{d}");
+                }
+                match &r.script {
+                    Some(s) => {
+                        println!();
+                        print!("{s}");
+                        if !s.ends_with('\n') {
+                            println!();
+                        }
+                    }
+                    None => println!(
+                        "(no script: a legacy Assistant routine, edited in the Assistant settings)"
+                    ),
+                }
+                let _ = v;
+            });
             Ok(None)
         }
         RoutinesCmd::Validate { file, home } => {

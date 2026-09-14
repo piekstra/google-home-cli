@@ -23,6 +23,7 @@ pub const HOME_DEVICES: &str = "HomeDevicesService";
 pub const DELETE_DEVICE: &str = "DeleteDevice";
 pub const UPDATE_DEVICE_SETTINGS: &str = "UpdateDeviceSettings";
 pub const SYNC_DEVICES: &str = "SyncDevices";
+pub const UPDATE_STRUCTURE_V2: &str = "UpdateStructureV2";
 
 /// True once every layout below has been verified against a live home.
 pub const LAYOUT_CONFIRMED: bool = true;
@@ -127,6 +128,12 @@ pub fn parse_spaces(v: &Value) -> Vec<Room> {
         .and_then(Value::as_array)
         .map(|a| a.iter().filter_map(homegraph::parse_room_value).collect())
         .unwrap_or_default()
+}
+
+/// `UpdateStructureV2Request{1: structure_id, 2: Structure{2: display_name}, 3: FieldMask{1: paths}}`,
+/// the way the app renames a home (decoded from Google Home 4.28.27.1).
+pub fn rename_structure(structure_id: &str, name: &str) -> Value {
+    json!([structure_id, [null, name], [["display_name"]]])
 }
 
 #[cfg(test)]
