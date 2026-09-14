@@ -4,6 +4,7 @@
 mod announce;
 mod audit;
 mod b64;
+mod cast;
 mod color;
 mod commands;
 mod config;
@@ -13,6 +14,7 @@ mod grpc;
 mod homegraph;
 mod session;
 mod spaces;
+mod speech;
 mod traits;
 
 use clap::{CommandFactory, Parser, Subcommand};
@@ -111,6 +113,14 @@ enum ConfigCmd {
     Unset { key: String },
 }
 
+/// A command whose report is already on stdout and still has to exit
+/// nonzero: `output::fail` would add a second document in `--json` mode,
+/// so only the stderr line and the code go out. The one place that does it.
+fn exit_reported(e: CliError) -> ! {
+    eprintln!("error: {e}");
+    std::process::exit(e.exit_code());
+}
+
 fn main() {
     let cli = Cli::parse();
     if let Err(e) = run(&cli) {
@@ -176,19 +186,24 @@ fn run(cli: &Cli) -> Result<(), CliError> {
         Command::Devices(cmd) => commands::devices::run(&ctx, cmd),
         Command::Agents(cmd) => commands::agents::run(&ctx, cmd),
         Command::Routines(cmd) => commands::routines::run(&ctx, cmd),
-        Command::Announce(args) => commands::announce::run(&ctx, args),
+        Command::Announce(args) => {
+            let failed = commands::announce::run(&ctx, args)?;
+            if failed > 0 {
+                exit_reported(CliError::Upstream(format!(
+                    "{failed} device(s) did not play the announcement; see the report"
+                )));
+            }
+            Ok(())
+        }
         Command::Audit(args) => {
             // Validate the expectations file before any credential is read.
             let expectations = commands::audit::load_expectations(args.expect.as_deref())?;
             commands::audit::validate(args, ctx.interactive)?;
             let failed = commands::audit::run(&ctx, args, expectations)?;
             if failed > 0 {
-                // The report is already on stdout; `output::fail` would add a
-                // second document in --json mode, so only the code goes out.
-                let e =
-                    CliError::Upstream(format!("{failed} audit fix(es) failed; see the report"));
-                eprintln!("error: {e}");
-                std::process::exit(e.exit_code());
+                exit_reported(CliError::Upstream(format!(
+                    "{failed} audit fix(es) failed; see the report"
+                )));
             }
             Ok(())
         }
