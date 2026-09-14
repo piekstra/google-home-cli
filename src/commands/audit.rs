@@ -7,7 +7,6 @@ use serde_json::{json, Value};
 use super::rooms::HomeFlag;
 use super::{confirm, require_confirmable, require_layout, Ctx};
 use crate::audit::{self, Action, Expectation, Fix, Status};
-use crate::spaces;
 
 #[derive(Args, Debug, Clone)]
 pub struct AuditArgs {
@@ -70,7 +69,9 @@ pub fn load_expectations(arg: Option<&str>) -> Result<Vec<Expectation>, CliError
     audit::parse_expectations(&raw)
 }
 
-pub fn run(ctx: &Ctx, args: &AuditArgs, expectations: Vec<Expectation>) -> Result<(), CliError> {
+/// Runs the audit (and `--apply`); returns how many fixes failed, which
+/// `main` turns into the exit code once the report is out.
+pub fn run(ctx: &Ctx, args: &AuditArgs, expectations: Vec<Expectation>) -> Result<usize, CliError> {
     let graph = ctx.graph()?;
     let mut findings = Vec::new();
     let mut fixes: Vec<Fix> = Vec::new();
@@ -142,7 +143,7 @@ pub fn run(ctx: &Ctx, args: &AuditArgs, expectations: Vec<Expectation>) -> Resul
             .collect();
         eprintln!("{}", line.join(" · "));
     });
-    Ok(())
+    Ok(0)
 }
 
 /// Describe one fix the way the confirmation prompt shows it.
@@ -170,53 +171,33 @@ fn apply_one(ctx: &Ctx, f: &Fix) -> Result<(), CliError> {
         .as_deref()
         .ok_or_else(|| CliError::NotFound(f.skipped.clone().unwrap_or_default()))?;
     if f.action == Action::Place {
-        ctx.write(
-            spaces::STRUCTURES,
-            spaces::BATCH_MODIFY_STRUCTURES_DEVICES,
-            &spaces::place_device(&f.home_id, &f.device_id),
-        )?;
+        super::devices::add_to_home(ctx, &f.home_id, &f.device_id)?;
     }
-    ctx.write(
-        spaces::SPACES,
-        spaces::BATCH_MODIFY_SPACES_DEVICES,
-        &spaces::move_device(room_id, &f.device_id),
-    )?;
-    super::devices::verify_in_room(ctx, &f.home_id, room_id, &f.device_id)
+    super::devices::move_into_room(ctx, &f.home_id, room_id, &f.device_id)
 }
 
-/// `--apply`: show the plan, ask once, do every fix, report each outcome.
-/// A failed fix does not stop the rest; the run exits 5 if any failed.
-fn apply(
-    ctx: &Ctx,
-    args: &AuditArgs,
-    summary: &audit::Summary,
-    fixes: Vec<Fix>,
-) -> Result<(), CliError> {
-    let doable = fixes.iter().filter(|f| f.skipped.is_none()).count();
-    if doable > 0 {
-        let plan: Vec<String> = fixes.iter().map(describe).collect();
-        confirm(
-            args.force,
-            &format!("{}\nApply {doable} change(s)?", plan.join("\n")),
-        )?;
-    }
-    let mut failed = 0usize;
-    let mut applied = 0usize;
-    let items: Vec<Value> = fixes
+/// Every fix through `do_one`, skipped rows untouched: the report rows plus
+/// how many were applied and how many failed. A failure never stops the
+/// rest.
+fn outcomes(
+    fixes: &[Fix],
+    mut do_one: impl FnMut(&Fix) -> Result<(), CliError>,
+) -> (Vec<Value>, usize, usize) {
+    let mut applied = 0;
+    let mut failed = 0;
+    let items = fixes
         .iter()
         .map(|f| {
             let mut row = serde_json::to_value(f).unwrap_or(Value::Null);
             let outcome = if f.skipped.is_some() {
                 Ok(false)
             } else {
-                apply_one(ctx, f).map(|()| true)
+                do_one(f).map(|()| true)
             };
             if let Value::Object(m) = &mut row {
                 match outcome {
                     Ok(done) => {
-                        if done {
-                            applied += 1;
-                        }
+                        applied += usize::from(done);
                         m.insert("applied".into(), json!(done));
                     }
                     Err(e) => {
@@ -229,6 +210,26 @@ fn apply(
             row
         })
         .collect();
+    (items, applied, failed)
+}
+
+/// `--apply`: show the plan, ask once, do every fix, report each outcome.
+/// A failed fix does not stop the rest; the run exits 5 if any failed.
+fn apply(
+    ctx: &Ctx,
+    args: &AuditArgs,
+    summary: &audit::Summary,
+    fixes: Vec<Fix>,
+) -> Result<usize, CliError> {
+    let doable = fixes.iter().filter(|f| f.skipped.is_none()).count();
+    if doable > 0 {
+        let plan: Vec<String> = fixes.iter().map(describe).collect();
+        confirm(
+            args.force,
+            &format!("{}\nApply {doable} change(s)?", plan.join("\n")),
+        )?;
+    }
+    let (items, applied, failed) = outcomes(&fixes, |f| apply_one(ctx, f));
     let skipped = fixes.len() - doable;
     let payload = json!({
         "summary": summary,
@@ -257,13 +258,57 @@ fn apply(
         }
         eprintln!("applied {applied} · failed {failed} · skipped {skipped}");
     });
-    if failed > 0 {
-        // The document is out; a returned error would append a second one.
-        let e = CliError::Upstream(format!(
-            "{failed} of {doable} change(s) failed; see the items above"
-        ));
-        eprintln!("error: {e}");
-        std::process::exit(e.exit_code());
+    Ok(failed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fix(id: &str, skipped: Option<&str>) -> Fix {
+        Fix {
+            action: Action::Move,
+            status: Status::Mismatch,
+            device_id: id.into(),
+            name: id.into(),
+            room: Some("Living Room".into()),
+            expected_room: "Office".into(),
+            room_id: skipped.is_none().then(|| "r1".to_string()),
+            home_id: "h1".into(),
+            home: "Lakeside".into(),
+            skipped: skipped.map(str::to_string),
+        }
     }
-    Ok(())
+
+    #[test]
+    fn a_failed_fix_is_reported_and_does_not_stop_the_rest() {
+        let fixes = vec![
+            fix("d1", None),
+            fix("d2", None),
+            fix("d3", Some("no room named `Attic`")),
+        ];
+        let mut seen = Vec::new();
+        let (items, applied, failed) = outcomes(&fixes, |f| {
+            seen.push(f.device_id.clone());
+            if f.device_id == "d1" {
+                Err(CliError::Upstream("Google said no".into()))
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(seen, ["d1", "d2"], "skipped rows are never attempted");
+        assert_eq!((applied, failed), (1, 1));
+        assert_eq!(items[0]["applied"], false);
+        assert!(
+            items[0]["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("Google said no")),
+            "{:?}",
+            items[0]["error"]
+        );
+        assert_eq!(items[1]["applied"], true);
+        assert!(items[1].get("error").is_none());
+        assert_eq!(items[2]["applied"], false);
+        assert_eq!(items[2]["skipped"], "no room named `Attic`");
+    }
 }

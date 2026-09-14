@@ -63,6 +63,17 @@ pub enum Status {
     Unplaced,
 }
 
+/// What decided a finding's expected room.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Source {
+    /// An explicit expectation from `--expect`; the only source `--apply`
+    /// acts on.
+    Expect,
+    /// The device's own name: a hint for a person, never a write.
+    Name,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Finding {
     pub status: Status,
@@ -73,10 +84,8 @@ pub struct Finding {
     pub room: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expected_room: Option<String>,
-    /// `expect` when an explicit expectation decided it, `name` when the
-    /// device's name did.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
+    pub source: Option<Source>,
     /// The vendor behind a matched expectation (`govee`, `tplink`, …), when
     /// its row named one.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -212,7 +221,7 @@ pub fn audit(
         let (expected, source, vendor) = match hit {
             Some((i, e)) => {
                 used[i] = true;
-                (e.room.clone(), Some("expect".to_string()), e.source.clone())
+                (e.room.clone(), Some(Source::Expect), e.source.clone())
             }
             None => (
                 room_from_name(&d.name, d.room.as_deref(), rooms).map(|r| r.name.clone()),
@@ -224,7 +233,7 @@ pub fn audit(
         // own gaps still come first: a room here is what the vendor-side fix
         // gets compared with.
         let unfiled = hit.is_some() && expected.is_none();
-        let source = source.or_else(|| expected.as_ref().map(|_| "name".to_string()));
+        let source = source.or_else(|| expected.as_ref().map(|_| Source::Name));
         let status = match (placed, &d.room, &expected) {
             (false, _, _) => Status::Unplaced,
             (_, None, _) => Status::Unassigned,
@@ -257,7 +266,7 @@ pub fn audit(
                 name: e.name.clone().or_else(|| e.id.clone()).unwrap_or_default(),
                 room: None,
                 expected_room: e.room.clone(),
-                source: Some("expect".into()),
+                source: Some(Source::Expect),
                 vendor: e.source.clone(),
                 partner_device_id: e.id.clone(),
                 home: home_name.map(str::to_string),
@@ -345,7 +354,7 @@ pub struct Fix {
 pub fn plan(findings: &[Finding], home: &Home) -> Vec<Fix> {
     findings
         .iter()
-        .filter(|f| f.source.as_deref() == Some("expect"))
+        .filter(|f| f.source == Some(Source::Expect))
         .filter_map(|f| {
             let action = match f.status {
                 Status::Mismatch | Status::Unassigned => Action::Move,
@@ -474,7 +483,7 @@ mod tests {
         assert_eq!(f.len(), 4);
         assert_eq!(f[0].status, Status::Mismatch);
         assert_eq!(f[0].expected_room.as_deref(), Some("Office"));
-        assert_eq!(f[0].source.as_deref(), Some("expect"));
+        assert_eq!(f[0].source, Some(Source::Expect));
         assert_eq!(f[1].status, Status::Ok);
         assert!(f[1].expected_room.is_none());
         assert_eq!(f[2].status, Status::Unassigned);
@@ -522,7 +531,7 @@ mod tests {
         let misfiled = device("d1", "Office Lamp", Some("Living Room"), None);
         let f = audit(None, &[&misfiled], &[], &rooms, &[]);
         assert_eq!(f[0].status, Status::Mismatch);
-        assert_eq!(f[0].source.as_deref(), Some("name"));
+        assert_eq!(f[0].source, Some(Source::Name));
     }
 
     #[test]
@@ -580,13 +589,13 @@ mod tests {
         assert_eq!(f[0].status, Status::Unfiled);
         assert!(f[0].expected_room.is_none());
         // `source` stays the closed set; the vendor rides in its own field.
-        assert_eq!(f[0].source.as_deref(), Some("expect"));
+        assert_eq!(f[0].source, Some(Source::Expect));
         assert_eq!(f[0].vendor.as_deref(), Some("govee"));
         // Google's own gap is reported first; the vendor's shows once it is fixed.
         assert_eq!(f[1].status, Status::Unassigned);
         // A vendor row that names no vendor: no made-up provenance.
         assert_eq!(f[2].status, Status::Unfiled);
-        assert_eq!(f[2].source.as_deref(), Some("expect"));
+        assert_eq!(f[2].source, Some(Source::Expect));
         assert!(f[2].vendor.is_none());
         assert_eq!(f[3].status, Status::Unmatched);
         assert!(f[3].expected_room.is_none());
@@ -617,24 +626,34 @@ mod tests {
             devices: vec![],
         };
         let finding =
-            |status: Status, source: &str, expected: Option<&str>, id: Option<&str>| Finding {
+            |status: Status, source: Source, expected: Option<&str>, id: Option<&str>| Finding {
                 status,
                 device_id: id.map(str::to_string),
                 name: "Lamp".into(),
                 room: Some("Living Room".into()),
                 expected_room: expected.map(str::to_string),
-                source: Some(source.into()),
+                source: Some(source),
                 vendor: None,
                 partner_device_id: None,
                 home: Some("Lakeside".into()),
             };
         let findings = vec![
-            finding(Status::Mismatch, "expect", Some("office"), Some("d1")),
-            finding(Status::Mismatch, "name", Some("Office"), Some("d2")),
-            finding(Status::Unplaced, "expect", Some("Living Room"), Some("d3")),
-            finding(Status::Unassigned, "expect", Some("Attic"), Some("d4")),
-            finding(Status::Ok, "expect", None, Some("d5")),
-            finding(Status::Unmatched, "expect", Some("Office"), None),
+            finding(Status::Mismatch, Source::Expect, Some("office"), Some("d1")),
+            finding(Status::Mismatch, Source::Name, Some("Office"), Some("d2")),
+            finding(
+                Status::Unplaced,
+                Source::Expect,
+                Some("Living Room"),
+                Some("d3"),
+            ),
+            finding(
+                Status::Unassigned,
+                Source::Expect,
+                Some("Attic"),
+                Some("d4"),
+            ),
+            finding(Status::Ok, Source::Expect, None, Some("d5")),
+            finding(Status::Unmatched, Source::Expect, Some("Office"), None),
         ];
         let fixes = plan(&findings, &home);
         let ids: Vec<&str> = fixes.iter().map(|f| f.device_id.as_str()).collect();
