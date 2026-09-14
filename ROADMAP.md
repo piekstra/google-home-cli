@@ -42,8 +42,8 @@ not built), **blocked** (needs something we don't have yet), **idea**.
 | Capability | Status | Notes |
 |---|---|---|
 | List routines / automations | done | `routines list` |
-| Run a routine | done (unverified live) | `routines run`, confirms unless `--force`; response `["1"]` = started |
-| Create / edit automations | idea | `UpsertAutomation`; script format unknown |
+| Run a routine | done | `routines run`, confirms unless `--force`; response `["1"]` = started. Verified live 2026-09-14 on an automation ghome created (a light changed colour) |
+| Create / edit / delete automations | done | `routines validate|create|update|delete --file <yaml>`: the script editor's YAML through `ValidateAutomation`, `UpsertAutomation` (field mask `script_details.content`, `status.is_enabled`) and `DeleteAutomation`, captured from the web editor; every write read back through the list |
 
 ## Vendor side (other repos, tracked here so the audit has inputs)
 

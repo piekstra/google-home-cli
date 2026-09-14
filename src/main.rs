@@ -72,7 +72,7 @@ enum Command {
     /// Partner integrations (Govee, Kasa, …) linked to the account.
     #[command(subcommand)]
     Agents(AgentsCmd),
-    /// Routines and automations: list, run.
+    /// Routines and automations: list, run, validate, create, update, delete.
     #[command(subcommand)]
     Routines(RoutinesCmd),
     /// Speak a message on the home's speakers and displays (announce/v1).
