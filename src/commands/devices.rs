@@ -141,7 +141,7 @@ pub struct ChangeArgs {
     #[arg(long, value_name = "KELVIN", value_parser = clap::value_parser!(u32).range(1000..=10000), conflicts_with = "color")]
     pub temp: Option<u32>,
     /// Colour: a name (red, teal, warm white, …), `#rrggbb`, `rgb(r,g,b)`
-    /// or `hsv(hue,sat)`.
+    /// or `hsv(hue,sat[,val])`.
     #[arg(long, value_name = "COLOUR", visible_alias = "colour")]
     pub color: Option<String>,
     /// Volume 0–100.
@@ -177,7 +177,7 @@ impl ChangeArgs {
             color_rgb: self
                 .color
                 .as_deref()
-                .map(crate::traits::parse_color)
+                .map(crate::color::parse_color)
                 .transpose()
                 .map_err(CliError::Usage)?,
             volume: self.volume,
