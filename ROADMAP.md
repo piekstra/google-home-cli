@@ -29,7 +29,7 @@ not built), **blocked** (needs something we don't have yet), **idea**.
 
 | Capability | Status | Notes |
 |---|---|---|
-| Announce / broadcast a message to speakers and displays | blocked | `ghome announce` implements the Play-services recipe (mesh scope + `OAuthSessionTrait.UpdateToken` handshake + `BroadcastCommand` over native gRPC) and Google answers status 13/3; the mesh client is a runtime-delivered native module. Remaining routes: local Cast with generated speech, or `ProcessQuery` text queries |
+| Announce / broadcast a message to speakers and displays | done (local) | `ghome announce` speaks over the LAN with the Cast protocol and generated speech (`--device`, `--room`, or everywhere; `--url` for any audio; `--volume` restored afterwards), verified live 2026-09-14. The cloud path (`--via cloud`: mesh scope + `OAuthSessionTrait.UpdateToken` + `BroadcastCommand` over native gRPC) stays blocked — Google answers status 13/3 and the mesh client is a runtime-delivered Play-services module |
 | Free-text command to the Assistant ("Ask Home") | planned | `ProcessQuery`; request shape decoded except the required surface-context slot |
 | Device on/off, brightness, colour temperature, colour | done | `devices set`, `rooms set` (`UpdateTraits`); `--color` takes a name, `#rrggbb`, `rgb()` or `hsv()` and writes `color.colorRGB` |
 | Volume / mute, media play-pause-stop | done | `devices set --volume/--mute/--media` (`UpdateTraits`); verified on lights only so far |
@@ -63,4 +63,4 @@ not built), **blocked** (needs something we don't have yet), **idea**.
 | Raw RPC passthrough | done | `api POST <Service>/<Method> --data '[...]'`; `--proto <base64>` sends serialized protobuf, `--grpc-web` frames it |
 | Public repo, releases, self-update | done | release on version bump |
 | Vendor CLIs on the family spec | done | govee-cli #20 and tplink-cloud-cli #3 (2026-09-10): text default + `--json`, family exit codes, `auth`/`config`/`self-update`/`info`, `piekstra.<bin>` keychain with migration; cli-common v0.8.0 carries the shared confirm gate, `pick` resolver, `emit_list`, keychain JSON items and the `device-rooms/v1` contract |
-| Broadcast to one device via local Cast (no Google auth) | idea | mDNS + Cast protocol; fallback if the cloud path stays closed |
+| Broadcast via local Cast (no Google auth) | done | `src/cast.rs`: mDNS `_googlecast._tcp` + CastMessage v2 over TLS 8009, Default Media Receiver; `announce` uses it by default |
