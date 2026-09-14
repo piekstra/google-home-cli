@@ -247,7 +247,7 @@ fn home_of<'a>(homes: &[&'a Home], device_id: &str) -> &'a Home {
 
 /// Read the room back and require the device to be listed in it: a 200 from
 /// a write is not proof the graph changed.
-fn verify_in_room(
+pub(crate) fn verify_in_room(
     ctx: &Ctx,
     home_id: &str,
     room_id: &str,

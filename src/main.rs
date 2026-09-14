@@ -179,6 +179,7 @@ fn run(cli: &Cli) -> Result<(), CliError> {
         Command::Audit(args) => {
             // Validate the expectations file before any credential is read.
             let expectations = commands::audit::load_expectations(args.expect.as_deref())?;
+            commands::audit::validate(args, ctx.interactive)?;
             commands::audit::run(&ctx, args, expectations)
         }
         Command::Api(args) => {
