@@ -26,7 +26,7 @@ before it is reported as done.
 ## Install
 
 ```console
-cargo install --git https://github.com/piekstra/google-home-cli
+cargo install --git https://github.com/piekstra/google-home-cli --locked
 # or a release binary: https://github.com/piekstra/google-home-cli/releases
 ```
 
