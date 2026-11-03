@@ -45,6 +45,7 @@ jobs:
           ./target/release/ghome --version
           ./target/release/ghome --help > /dev/null
           ./target/release/ghome info > /dev/null
+          ./target/release/ghome mcp --list-tools > /dev/null
 
   # The only platform-specific sliver is the apple-native keyring backend, so
   # macOS gets a targeted compile + smoke, not a second copy of the whole

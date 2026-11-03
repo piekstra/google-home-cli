@@ -57,9 +57,14 @@ fn home_graph_slots_the_codec_reads_are_present() {
 
 #[test]
 fn fixtures_carry_only_dummy_identities() {
-    let v = fixture("get-home-graph.json");
     let mut strings = Vec::new();
-    collect_strings(&v, &mut strings);
+    for name in [
+        "get-home-graph.json",
+        "mcp-home-graph.json",
+        "get-traits.json",
+    ] {
+        collect_strings(&fixture(name), &mut strings);
+    }
     for s in strings {
         if s.contains('@') {
             assert!(

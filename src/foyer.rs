@@ -99,17 +99,40 @@ impl<'a> Foyer<'a> {
         } else {
             (status, text)
         };
-        match status {
-            200..=299 => serde_json::from_str(strip_xssi(&text))
-                .map_err(|e| CliError::Upstream(format!("foyer returned non-JSON: {e}"))),
-            401 | 403 => Err(CliError::Auth(format!(
-                "foyer rejected the credential (HTTP {status}); run `ghome auth login` again"
-            ))),
-            404 => Err(CliError::NotFound(format!("HTTP 404 from foyer for {url}"))),
-            _ => Err(CliError::Upstream(format!(
-                "foyer HTTP {status}: {}",
-                snippet(&text)
-            ))),
+        read_answer(status, &text, url)
+    }
+
+    /// [`call`](Self::call) for a command that changes a device, for a caller that must not
+    /// send it twice. A connection that never opened sent nothing, and a refusal is a refusal,
+    /// and both stay errors. Any other failure may have come after Google took the command, so
+    /// it is [`Written::NoAnswer`].
+    pub fn write(&mut self, url: &str, body: &Value) -> Result<Written, CliError> {
+        let bearer = self.session.bearer(&self.client, self.creds)?;
+        let sent = self.send(url, body, &bearer);
+        let sent = match sent {
+            Ok((401 | 403, _)) => {
+                let bearer = self.session.refresh_bearer(&self.client, self.creds)?;
+                self.send(url, body, &bearer)
+            }
+            other => other,
+        };
+        let (status, text) = match sent {
+            Ok(answer) => answer,
+            Err(e) if e.is_connect() => {
+                return Err(CliError::Upstream(format!(
+                    "foyer request: {}",
+                    e.without_url()
+                )))
+            }
+            Err(e) => return Ok(Written::NoAnswer(e.without_url().to_string())),
+        };
+        if status >= 500 {
+            return Ok(Written::NoAnswer(format!("HTTP {status}")));
+        }
+        match read_answer(status, &text, url) {
+            Ok(_) => Ok(Written::Answered),
+            Err(e) if (200..=299).contains(&status) => Ok(Written::NoAnswer(e.to_string())),
+            Err(e) => Err(e),
         }
     }
 
@@ -197,7 +220,7 @@ impl<'a> Foyer<'a> {
         let resp = req
             .body(body.to_vec())
             .send()
-            .map_err(|e| CliError::Upstream(format!("request: {e}")))?;
+            .map_err(|e| CliError::Upstream(format!("request: {}", e.without_url())))?;
         let status = resp.status().as_u16();
         let hdr = |name: &str| {
             resp.headers()
@@ -220,7 +243,7 @@ impl<'a> Foyer<'a> {
         }
         let bytes = resp
             .bytes()
-            .map_err(|e| CliError::Upstream(format!("reading response: {e}")))?
+            .map_err(|e| CliError::Upstream(format!("reading response: {}", e.without_url())))?
             .to_vec();
         if self.verbose {
             eprintln!("HTTP {status} ({} bytes)", bytes.len());
@@ -229,6 +252,11 @@ impl<'a> Foyer<'a> {
     }
 
     fn post(&self, url: &str, body: &Value, bearer: &str) -> Result<(u16, String), CliError> {
+        self.send(url, body, bearer)
+            .map_err(|e| CliError::Upstream(format!("foyer request: {}", e.without_url())))
+    }
+
+    fn send(&self, url: &str, body: &Value, bearer: &str) -> Result<(u16, String), reqwest::Error> {
         if self.verbose {
             eprintln!("POST {url}");
         }
@@ -239,16 +267,37 @@ impl<'a> Foyer<'a> {
             .header(reqwest::header::CONTENT_TYPE, CONTENT_TYPE)
             .header("X-User-Agent", X_USER_AGENT)
             .body(body.to_string())
-            .send()
-            .map_err(|e| CliError::Upstream(format!("foyer request: {e}")))?;
+            .send()?;
         let status = resp.status().as_u16();
-        let text = resp
-            .text()
-            .map_err(|e| CliError::Upstream(format!("reading foyer response: {e}")))?;
+        let text = resp.text()?;
         if self.verbose {
             eprintln!("HTTP {status} ({} bytes)", text.len());
         }
         Ok((status, text))
+    }
+}
+
+/// What a write got back from Google.
+#[derive(Debug)]
+pub enum Written {
+    /// It took the command. The echo does not say the device did (docs/api.md).
+    Answered,
+    /// The reason, with no URL.
+    NoAnswer(String),
+}
+
+fn read_answer(status: u16, text: &str, url: &str) -> Result<Value, CliError> {
+    match status {
+        200..=299 => serde_json::from_str(strip_xssi(text))
+            .map_err(|e| CliError::Upstream(format!("foyer returned non-JSON: {e}"))),
+        401 | 403 => Err(CliError::Auth(format!(
+            "foyer rejected the credential (HTTP {status}); run `ghome auth login` again"
+        ))),
+        404 => Err(CliError::NotFound(format!("HTTP 404 from foyer for {url}"))),
+        _ => Err(CliError::Upstream(format!(
+            "foyer HTTP {status}: {}",
+            snippet(text)
+        ))),
     }
 }
 

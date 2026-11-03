@@ -66,6 +66,7 @@ fn every_subcommand_help_renders() {
         vec!["devices", "state", "--help"],
         vec!["devices", "set", "--help"],
         vec!["rooms", "set", "--help"],
+        vec!["mcp", "--help"],
         vec!["rooms", "delete", "--help"],
         vec!["routines", "list", "--help"],
         vec!["routines", "run", "--help"],

@@ -10,6 +10,12 @@ CLI emits. Tests load them as files; nothing is embedded as a string literal.
   room membership at `Room[4]` and the user-assigned type at `Device[20]`).
   Replace it with a scrubbed live capture once one exists; keep the file name.
 
+- `mcp-home-graph.json` — **synthetic**, the same shape, for `src/mcp/tests.rs`: two homes, and one
+  device of each kind a write must refuse, including a lock a user typed as a light, a relay typed as
+  a garage door, and a heater on a smart plug.
+- `get-traits.json` — a `HomeControlService/GetTraits` response. **Synthetic**, from the shape in
+  `docs/api.md`, with a vendor trait no tool may repeat.
+
 ## Scrubbing policy (enforced by `tests/fixture_shapes.rs`)
 
 Every identity-bearing value must be an obvious dummy:

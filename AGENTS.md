@@ -27,8 +27,10 @@ Run `make verify` before considering a change done — it's exactly what CI runs
 - `src/main.rs` — clap tree, arg validation, exit-code mapping, `auth`/`config`.
 - `src/gpsoauth.rs` — the Android token exchanges (oauth_token → master token
   → Bearer). Pure form-building + a thin POST; unit-tested offline.
-- `src/session.rs` — keychain layout: master token at `<email>`, cached Bearer
-  at `<email>/bearer`; mint/refresh logic.
+- `src/session.rs` — keychain layout: master token and cached Bearer together
+  in one item at `<email>` (a `<email>/bearer` item is legacy, read and removed);
+  mint/refresh logic under `RefreshLock`.
+- `src/mcp.rs` — `ghome mcp`; see "The MCP tools".
 - `src/foyer.rs` — the RPC transport (positional JSON over HTTPS), 401/403
   → re-mint once.
 - `src/homegraph.rs` — codec for `GetHomeGraph` → `Home`/`Room`/`Device`,
@@ -68,13 +70,37 @@ Run `make verify` before considering a change done — it's exactly what CI runs
   RPC gets its layout from the app's descriptors (docs/api.md), not from
   trial requests. `spaces::LAYOUT_CONFIRMED` gates every write.
 
+## The MCP tools
+
+`src/mcp.rs` is `ghome mcp` (cli-common `DESIGN.md` §1.9). Two tools read; `ghome_device_set` and
+`ghome_room_lights` change something, follow my-q-cli's pattern, and are not read-only. A write names one device or
+room by its full name or id (`named_device`, `named_room`), reaches a device only when `kind` and `assigned_kind` are
+both on `CONTROLLABLE_KINDS`, can send only a `Wanted`, and returns the state read back with `confirmed`, also when the
+command's own answer was lost (`Sent::NoAnswer`). A room is the one group a tool reaches, and only its lights
+(`is_a_light`). A new argument or tool goes on the lists in `src/mcp/tests.rs`, and a new tool in
+`packaging/mcpb/manifest.json` and README's table. The definitions stay under 8,000 characters together. No tool
+removes, renames or moves a device, edits a room or a routine, announces, sets volume or media, locks or unlocks,
+or reaches `ghome api`, whatever the CLI can do. `GetHomeGraph` carries the address, linked users, partner ids and
+`local_auth_token`: `read_state` and `device_item` copy named fields only, and must go on doing so. Each request waits
+15 s, no command goes out 60 s after the call began (`SEND_DEADLINE`, which also covers a keychain prompt answered
+late), and no read-back starts after 85 s, so a write answers inside `--http`'s 120 s.
+
+This crate pins cli-common **v0.23.0**, the spec it conforms to.
+
+## Releasing
+
+Bump `version` in `Cargo.toml` and `packaging/mcpb/manifest.json`, add to `CHANGELOG.md`, merge, then push the tag
+`v<version>`. The workflow checks the tag, crate and manifest agree, builds the tarballs `self-update` finds and the
+`.mcpb`, and publishes once all of them are there. A pull request that touches the workflow, packaging or dependencies
+runs everything but the publish as a dry run.
+
 ## Tests
 
 Offline, always. No test may read the OS keychain: `cargo test` produces an
 ad-hoc-signed binary that macOS treats as a new identity, so a credentialed
 command would prompt once per keychain item on every run. The surface tests
-use a nonexistent `GHOME_CONFIG` so credentialed commands stop at exit 3
-before the keychain. Live checks go through the installed binary by hand.
+and `tests/mcp_stdio.rs` use a nonexistent `GHOME_CONFIG` so credentialed commands
+stop at exit 3 before the keychain. Live checks go through the installed binary by hand.
 
 ## Safety & privacy (this will be a public repo)
 

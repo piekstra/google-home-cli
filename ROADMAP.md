@@ -34,6 +34,7 @@ not built), **blocked** (needs something we don't have yet), **idea**.
 | Device on/off, brightness, colour temperature, colour | done | `devices set`, `rooms set` (`UpdateTraits`); `--color` takes a name, `#rrggbb`, `rgb()` or `hsv()` and writes `color.colorRGB` |
 | Volume / mute, media play-pause-stop | done | `devices set --volume/--mute/--media` (`UpdateTraits`); verified on lights only so far |
 | Full device state read | done | `devices state` (`GetTraits`) |
+| MCP tools for Claude | done | `ghome mcp`: `ghome_devices`, `ghome_device_state` read; `ghome_device_set`, `ghome_room_lights` change a named light, plug, wall switch or room's lights, and return the state read back. Stdio, `.mcpb`, and `--http` for your own Worker. Offline tests only so far: not yet run against a real home |
 | Lock / unlock with PIN challenge | planned | `UpdateTraits` `lockUnlock`, `pin` on `pinNeeded` |
 | Thermostat setpoint / mode | idea | `UpdateTraits` `temperatureSetting` |
 

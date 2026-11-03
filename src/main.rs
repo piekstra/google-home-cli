@@ -12,6 +12,7 @@ mod foyer;
 mod gpsoauth;
 mod grpc;
 mod homegraph;
+mod mcp;
 mod session;
 mod spaces;
 mod speech;
@@ -19,6 +20,7 @@ mod traits;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
+use pk_cli_auth::refresh_lock::RefreshLock;
 use pk_cli_auth::{AuthMethod, AuthStatus, LoginArgs, LogoutArgs, SetCredentialArgs};
 use pk_cli_config::ConfigStore;
 use pk_cli_core::dates::fmt_rfc3339;
@@ -81,6 +83,9 @@ enum Command {
     Audit(AuditArgs),
     /// Raw Foyer RPC passthrough: `api POST <Service>/<Method> --data '[...]'`.
     Api(commands::api::RawArgs),
+    /// Serve the devices to Claude over MCP: two reads and two tools that change a device
+    /// (stdio; `--http` serves the reads on 127.0.0.1, `--allow-writes` adds the two).
+    Mcp(pk_cli_mcp::McpArgs),
     /// Update to the latest release from GitHub.
     SelfUpdate(SelfUpdateArgs),
     /// Print a shell completion script.
@@ -95,7 +100,8 @@ enum AuthCmd {
     Login(LoginArgs),
     /// Report credential/session state (auth-status/v1).
     Status,
-    /// Clear the cached session; --forget also removes the stored credential.
+    /// Clear the cached session; --forget also removes the stored credential and the connector
+    /// token of `ghome mcp --http`.
     Logout(LogoutArgs),
     /// Raw keychain write of a master token (`aas_et/…`) for headless setup.
     SetCredential(SetCredentialArgs),
@@ -143,7 +149,16 @@ fn run(cli: &Cli) -> Result<(), CliError> {
                 target: env!("BUILD_TARGET").into(),
                 current: env!("CARGO_PKG_VERSION").into(),
             }
-            .run(args, cli.common.json, cli.common.quiet)
+            .run_noting(
+                args,
+                cli.common.json,
+                cli.common.quiet,
+                &pk_cli_mcp::restart_note(BIN),
+            )
+        }
+        Command::Mcp(args) => {
+            let source = mcp::LiveSource::new(cli.config.clone());
+            return pk_cli_mcp::run(args, mcp::GhomeTools::new(source));
         }
         Command::Completions { shell } => {
             clap_complete::generate(*shell, &mut Cli::command(), BIN, &mut std::io::stdout());
@@ -160,7 +175,7 @@ fn run(cli: &Cli) -> Result<(), CliError> {
                     login_hint: Some(format!("{BIN} auth login")),
                 },
                 &[
-                    "homes", "rooms", "devices", "agents", "routines", "audit", "api",
+                    "homes", "rooms", "devices", "agents", "routines", "audit", "api", "mcp",
                 ],
             );
             output::json(&serde_json::to_value(&info).unwrap());
@@ -217,6 +232,7 @@ fn run(cli: &Cli) -> Result<(), CliError> {
             commands::api::run(&ctx, args, body)
         }
         Command::Config(_)
+        | Command::Mcp(_)
         | Command::SelfUpdate(_)
         | Command::Completions { .. }
         | Command::Info => {
@@ -293,6 +309,8 @@ fn auth(cli: &Cli, cmd: &AuthCmd, ctx: &Ctx) -> Result<(), CliError> {
                     "a credential is already stored; pass --overwrite to replace it".into(),
                 ));
             }
+            // A stuck lock fails here, before anyone pastes a single-use token.
+            RefreshLock::for_binary(BIN)?.before_signin()?;
             let prompt = if args.non_interactive {
                 None
             } else {
@@ -352,7 +370,7 @@ fn auth(cli: &Cli, cmd: &AuthCmd, ctx: &Ctx) -> Result<(), CliError> {
                     );
                 }
             }
-            session.persist_master(creds)?;
+            RefreshLock::for_binary(BIN)?.store_signin(|| session.persist_master(creds))?;
 
             // Persist the identity the credential is bound to.
             let mut cfg: Config = ctx.store.load()?;
@@ -366,15 +384,44 @@ fn auth(cli: &Cli, cmd: &AuthCmd, ctx: &Ctx) -> Result<(), CliError> {
         }
         AuthCmd::Status => unreachable!("handled above"),
         AuthCmd::Logout(args) => {
-            let user = cfg.username.clone().ok_or_else(|| {
-                CliError::Usage("nothing to log out of: no Google account configured".into())
-            })?;
-            Session::logout(creds, &user, args.forget)?;
+            match cfg.username.clone() {
+                // The delete runs with or without the lock; a mint in flight must not store the
+                // credential again behind it.
+                Some(user) => {
+                    RefreshLock::forget_for_binary(BIN, || {
+                        Session::logout(creds, &user, args.forget)
+                    })?;
+                }
+                // No account to clear, and a connector token can outlive one.
+                None if args.forget => {}
+                None => {
+                    return Err(CliError::Usage(
+                        "nothing to log out of: no Google account configured".into(),
+                    ))
+                }
+            }
             if args.forget {
+                // Nothing records whether `mcp --new-token` ran, so this delete is ungated: a
+                // keyring that is not running, or a prompt declined, must not leave the config
+                // behind it.
+                let token = creds.delete(pk_cli_mcp::HTTP_TOKEN_ACCOUNT);
                 ctx.store.clear()?;
+                token.map_err(|failure| {
+                    CliError::Keychain(format!(
+                        "the credential and config are cleared, but the connector token of \
+                         `ghome mcp --http` could not be removed, if there is one: {failure}"
+                    ))
+                })?;
             }
             if !cli.common.quiet {
-                eprintln!("logged out");
+                if args.forget {
+                    eprintln!("logged out; connector token removed; config cleared");
+                } else {
+                    eprintln!(
+                        "logged out. The connector token of `ghome mcp --http` is still stored; \
+                         use `ghome auth logout --forget` to remove it too."
+                    );
+                }
             }
             Ok(())
         }
@@ -396,7 +443,7 @@ fn auth(cli: &Cli, cmd: &AuthCmd, ctx: &Ctx) -> Result<(), CliError> {
                     gpsoauth::MASTER_TOKEN_PREFIX
                 )));
             }
-            creds.set(&user, &secret)?;
+            RefreshLock::for_binary(BIN)?.store_signin(|| creds.set(&user, &secret))?;
             if cfg.android_id.is_none() {
                 let mut cfg: Config = ctx.store.load()?;
                 cfg.android_id = Some(gpsoauth::new_android_id());

@@ -11,7 +11,8 @@ Claude Code specifics:
   Google account. The token exchange is unit-tested offline; live login is
   the owner's call.
 - **Writes act on a real home.** `devices move|place` and `rooms
-  create|rename` change the owner's Google Home. Don't run them to "test";
+  create|rename` change the owner's Google Home, and so do the two write tools
+  of `ghome mcp`. Don't run them to "test";
   the encoders are unit-tested and the layouts documented in `docs/api.md`.
   Never add a write RPC by guessing its positional layout.
 - **Secrets:** the master token and cached Bearer live in the OS keychain
