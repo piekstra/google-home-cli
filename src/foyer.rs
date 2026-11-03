@@ -143,6 +143,8 @@ impl<'a> Foyer<'a> {
                     e.without_url()
                 )))
             }
+            // Google answered with the redirect and took no command, and this keeps the reason.
+            Err(e) if e.is_redirect() => return Err(e.into()),
             Err(e) => return Ok(Written::NoAnswer(e.without_url().to_string())),
         };
         if status >= 500 {
@@ -236,10 +238,12 @@ impl<'a> Foyer<'a> {
             BinaryMode::GrpcWeb => req = req.header("X-Grpc-Web", "1"),
             BinaryMode::Proto => {}
         }
-        let resp = req
-            .body(body.to_vec())
-            .send()
-            .map_err(|e| CliError::Upstream(format!("request: {}", e.without_url())))?;
+        let resp = req.body(body.to_vec()).send().map_err(|e| {
+            if e.is_redirect() {
+                return CliError::from(e);
+            }
+            CliError::Upstream(format!("request: {}", e.without_url()))
+        })?;
         let status = resp.status().as_u16();
         let hdr = |name: &str| {
             resp.headers()
@@ -454,7 +458,8 @@ mod tests {
             .post(&first)
             .form(&[("Token", "dummy")])
             .send();
-        assert!(sent.is_err());
+        let text = CliError::from(sent.unwrap_err()).to_string();
+        assert!(text.contains("another host"), "{text}");
         assert_eq!(arrived.load(Ordering::SeqCst), 0);
     }
     use std::cell::{Cell, RefCell};

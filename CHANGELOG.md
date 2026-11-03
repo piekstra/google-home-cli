@@ -6,7 +6,8 @@
   a credential. A full `http://` URL sent the bearer in the clear.
 - **Security fix:** no client that carries a credential follows a redirect off its host. A 307 or 308
   re-sends a body, and a form to Google's auth endpoint holds a master token or an oauth token. A redirect
-  to another host is now an error.
+  to another host is now an error that says so, and a write refused this way is reported as a failure, not
+  as an unknown outcome.
 - A write's deadlines are now cli-common's `SendDeadline`, with the same 60 s to send and 85 s to start a
   read-back, on both clocks. Its refusal is an `other` error in place of `upstream`, since Google did not
   fail, and it tells the caller to check the current state before calling again.

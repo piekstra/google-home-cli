@@ -128,7 +128,12 @@ fn post(client: &Client, form: &[(String, String)]) -> Result<BTreeMap<String, S
         .header(reqwest::header::ACCEPT_ENCODING, "identity")
         .form(form)
         .send()
-        .map_err(|e| CliError::Upstream(format!("android auth endpoint: {}", e.without_url())))?;
+        .map_err(|e| {
+            if e.is_redirect() {
+                return CliError::from(e);
+            }
+            CliError::Upstream(format!("android auth endpoint: {}", e.without_url()))
+        })?;
     // The endpoint answers 403 for a rejected token but still carries the
     // `Error=` line, so read the body regardless of status.
     let body = resp.text().map_err(|e| {
