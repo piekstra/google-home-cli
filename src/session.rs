@@ -8,11 +8,13 @@
 //! (older installs kept the bare master token there and the bearer under
 //! `<email>/bearer`; both shapes are read and migrated on first use.)
 
+use pk_cli_auth::refresh_lock::RefreshLock;
 use pk_cli_core::CliError;
 use pk_cli_secrets::{CredentialStore, Secret};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 
+use crate::config::Config;
 use crate::gpsoauth;
 
 /// Treat a bearer expiring within this window as already gone, so a command
@@ -38,6 +40,14 @@ struct Stored {
     expires_at: Option<u64>,
 }
 
+/// Whether a stored item, in either layout, is this master token's.
+fn holds_master(raw: &str, master: &str) -> bool {
+    match serde_json::from_str::<Stored>(raw) {
+        Ok(stored) => stored.master == master,
+        Err(_) => raw == master,
+    }
+}
+
 pub struct Session {
     pub email: String,
     pub android_id: String,
@@ -57,6 +67,18 @@ fn bearer_account(email: &str) -> String {
 }
 
 impl Session {
+    /// The stored session of the configured account. `Auth` (exit 3), before the keychain, when
+    /// no account is configured.
+    pub fn for_config(creds: &CredentialStore, cfg: &Config) -> Result<Self, CliError> {
+        let email = cfg.username.as_deref().ok_or_else(|| {
+            CliError::Auth("no Google account configured; run `ghome auth login`".into())
+        })?;
+        let android_id = cfg.android_id.as_deref().ok_or_else(|| {
+            CliError::Auth("no device identity stored; run `ghome auth login`".into())
+        })?;
+        Self::load(creds, email, android_id)
+    }
+
     /// Load the stored credential for `email`. `Auth` (exit 3) when nothing is
     /// stored, so drivers can branch straight to `auth login`.
     pub fn load(creds: &CredentialStore, email: &str, android_id: &str) -> Result<Self, CliError> {
@@ -74,7 +96,8 @@ impl Session {
                 },
             ),
             // Legacy layout: bare master token here, bearer in its own item.
-            // Migrate to the single item and drop the second one.
+            // Migrate to the single item and drop the second one. A server runs this too, so the
+            // write takes the guard a mint does, and a logout during that read stays a logout.
             Err(_) => {
                 let master = Secret::new(raw.expose().to_string());
                 let bearer = creds
@@ -86,7 +109,7 @@ impl Session {
                     master,
                     bearer,
                 };
-                s.persist(creds)?;
+                s.cache_bearer(creds)?;
                 let _ = creds.delete(&bearer_account(email));
                 return Ok(s);
             }
@@ -174,8 +197,40 @@ impl Session {
         });
         // A failed cache write is not worth failing the command over: the
         // bearer still works for this invocation.
-        let _ = self.persist(creds);
+        let _ = self.cache_bearer(creds);
         Ok(minted.auth)
+    }
+
+    /// Write the new bearer back, if the item still holds this session's master token. The write
+    /// carries that token, and a server can be minting while `auth logout --forget` or `auth login
+    /// --overwrite` runs, so this holds the lock they take and reads first: a credential the user
+    /// removed or replaced must not come back. A login has no item yet while it verifies, and
+    /// stores one itself.
+    fn cache_bearer(&self, creds: &CredentialStore) -> Result<(), CliError> {
+        RefreshLock::for_binary(crate::BIN)?.renew(
+            || creds.get(&self.email),
+            |stored| {
+                stored
+                    .as_ref()
+                    .is_some_and(|raw| holds_master(raw.expose(), self.master.expose()))
+            },
+            |stored| {
+                self.persist(creds)?;
+                Ok(stored)
+            },
+        )?;
+        Ok(())
+    }
+
+    /// A session holding a bearer that is good for an hour, so a test reaches no keychain.
+    #[cfg(test)]
+    pub fn with_bearer(email: &str, android_id: &str, token: &str) -> Self {
+        let mut session = Self::fresh(email, android_id, Secret::new("dummy-master"));
+        session.bearer = Some(CachedBearer {
+            token: token.to_string(),
+            expires_at: now_unix() + 3600,
+        });
+        session
     }
 
     /// A Bearer for a scope other than the home-graph one (not cached; the
@@ -206,5 +261,22 @@ impl Session {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_bearer_is_cached_only_over_the_master_token_it_came_from() {
+        let item = r#"{"master":"dummy-master","bearer":"dummy-bearer","expires_at":1}"#;
+        assert!(holds_master(item, "dummy-master"));
+        assert!(!holds_master(item, "dummy-replaced"));
+        assert!(
+            holds_master("dummy-master", "dummy-master"),
+            "the legacy layout"
+        );
+        assert!(!holds_master("dummy-replaced", "dummy-master"));
     }
 }

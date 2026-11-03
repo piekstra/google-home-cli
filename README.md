@@ -194,6 +194,101 @@ ghome api POST StructuresService/GetHomeGraph --data '[]'
 
 Bodies are positional protobuf arrays; see [docs/api.md](docs/api.md).
 
+## Use with Claude
+
+`ghome mcp` serves four tools over MCP, so Claude can see your Google Home and, when you ask, change one
+light, plug or wall switch, or the lights of one room. There is no hosted service: the tools run on your
+computer, in your copy of `ghome`, and call Google with your credential.
+
+| Tool | Does | Changes a device |
+| --- | --- | --- |
+| `ghome_devices` | What do I have? Name, kind, room, online and what the tools can change on it, narrowed by `name` and `room` | no |
+| `ghome_device_state` | Is it on? Online, power, brightness, color or color temperature, and whether a lock is locked | no |
+| `ghome_device_set` | Set one light, plug or wall switch: `power`, `brightness`, `color` or `color_temp_k` | **yes** |
+| `ghome_room_lights` | Set the lights of one room, and nothing else in it | **yes** |
+
+The two that change a device are not read-only and carry `anthropic/requiresUserInteraction`, so a client
+that honors them asks you before every call. `ghome_device_set` takes one device by its full name or its id,
+and `ghome_room_lights` one room the same way. Part of a name is refused however unique, so "all" cannot
+reach the hallway light, a name two devices or rooms share is refused, and there is no list, wildcard or
+"everything". A write reaches only a device that Google calls a light, an outlet or a switch **and** that you
+have not typed as something else, so a heater or a garage door on a smart plug is refused, and so is a lock
+you typed as a light. A room's plugs and switches stay as they are unless you typed one as a light, and its other devices always do.
+
+Each returns the state read back from Google, about 1.5 and 4.5 seconds later, with `confirmed`: `true`
+only when that state shows the change. If it does not, or the read fails, a `note` says so. That is not a
+failure, and Claude is told not to send the command again. If the command's own answer is lost, the state read
+back settles it the same way, and the `note` says the outcome is unknown until it does. A write that reaches its
+command 60 seconds or more after the call began sends nothing and says so.
+
+No tool can remove, rename or move a device, edit a room, run or edit a routine, make an announcement, set a
+speaker's volume or media, unlock a door, change your account or share access, and none reaches `ghome api`.
+
+Results are concise by default (`response_format: "detailed"` adds a device's id, model and home), 25 records a
+page with a cursor for more. A field a device left out is absent and never a default, and a list that could not
+read who is online says so in `note`. Each page reads Google again, so a device added between pages can repeat
+or be skipped: for a count, read one call with `limit` up to 200. Device and room names are yours; the server
+tells Claude to treat them as data, not instructions. Your home's address, the people linked to it, a device's
+`local_auth_token` and its partner ids never reach a result. Tools wait 15 seconds for each request.
+
+**Sign in first.** Run `ghome auth login` in a terminal ([Setup](#setup)). Every path reads that credential from
+the OS keychain (service `piekstra.ghome`), writes a short-lived token back beside it under a lock every `ghome`
+process shares, and asks for nothing itself. When the credential ends the tools say so and ask you to run it
+again. On macOS a program the keychain has not seen asks once per item, for the read and for the write of a new
+token; choose Always Allow for each.
+
+**Claude Code.** Add the `google-home-cli` plugin from the
+[piekstra plugin marketplace](https://github.com/piekstra/claude-plugins):
+
+```console
+$ claude plugin marketplace add piekstra/claude-plugins
+$ claude plugin install google-home-cli@piekstra-plugins
+```
+
+or register the server yourself:
+
+```console
+$ claude mcp add ghome -- ghome mcp
+```
+
+**Claude Desktop.** Download `ghome-<version>.mcpb` from the
+[latest release](https://github.com/piekstra/google-home-cli/releases/latest) and open it. It has no settings:
+install the CLI and sign in first, and the bundled `ghome` reads the same keychain credential. A new version of
+the extension is a new program to the keychain and can ask again. macOS and Linux only;
+[`SECURITY.md`](SECURITY.md) says why there is no Windows build.
+
+Any other MCP client that launches a local server can run `ghome mcp`.
+
+**Claude on the web and mobile.** claude.ai reaches tools through a remote connector, so `ghome` serves the
+tools from your computer to a connector you deploy into your own Cloudflare account:
+
+```console
+$ ghome mcp --new-token            # once: a bearer token, saved in the keychain and printed for the Worker
+$ ghome mcp --http --port 8762     # serve on 127.0.0.1 only
+```
+
+The connector, [cli-common's `connector/`](https://github.com/piekstra/cli-common/tree/main/connector#tools-from-your-computer-home-modules),
+reaches that port through a Cloudflare Tunnel in your account; its README walks through the tunnel, the VPC
+service, a launchd agent that keeps the server running, and the `HOME_GHOME_TOKEN` secret, with the threat model.
+`--http` binds 127.0.0.1 only, refuses to start without the token, and refuses any request whose `Host` is not
+loopback or that carries an `Origin`.
+
+It serves the two reads only. `--allow-writes` adds `ghome_device_set` and `ghome_room_lights`, and then anyone
+holding the token can change your lights and plugs through your Worker, with no prompt unless the client asks for
+one; leave it off unless you want that. Your Google credential stays on your computer, but tool results do not:
+your device and room names and their states pass through Cloudflare and reach Claude
+([`SECURITY.md`](SECURITY.md)). While the computer sleeps, the tools answer that it is offline.
+
+After `ghome self-update`, restart the server: a running one keeps the old code, and its launchd agent restarts it
+only when it exits. Its start line names the version.
+
+```console
+$ launchctl kickstart -k gui/$(id -u)/com.piekstra.ghome-mcp-http
+```
+
+`self-update` does not reach a Claude Desktop extension, which runs its own copy. Install the new release's
+`.mcpb` too.
+
 ## Exit codes
 
 0 ok · 2 usage · 3 auth (run `auth login`) · 4 not found · 5 upstream ·

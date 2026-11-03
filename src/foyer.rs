@@ -99,17 +99,51 @@ impl<'a> Foyer<'a> {
         } else {
             (status, text)
         };
-        match status {
-            200..=299 => serde_json::from_str(strip_xssi(&text))
-                .map_err(|e| CliError::Upstream(format!("foyer returned non-JSON: {e}"))),
-            401 | 403 => Err(CliError::Auth(format!(
-                "foyer rejected the credential (HTTP {status}); run `ghome auth login` again"
-            ))),
-            404 => Err(CliError::NotFound(format!("HTTP 404 from foyer for {url}"))),
-            _ => Err(CliError::Upstream(format!(
-                "foyer HTTP {status}: {}",
-                snippet(&text)
-            ))),
+        read_answer(status, &text, url)
+    }
+
+    /// [`call`](Self::call) for a command that changes a device, for a caller that must not
+    /// send it twice. A connection that never opened sent nothing, and a refusal is a refusal,
+    /// and both stay errors. Any other failure may have come after Google took the command, so
+    /// it is [`Written::NoAnswer`].
+    ///
+    /// `in_time` can stop it before each send: nothing goes out once it answers an error.
+    pub fn write(
+        &mut self,
+        url: &str,
+        body: &Value,
+        in_time: &dyn Fn() -> Result<(), CliError>,
+    ) -> Result<Written, CliError> {
+        let (client, creds, verbose) = (&self.client, self.creds, self.verbose);
+        let session = &mut *self.session;
+        let sent = send_in_time(
+            |renew| {
+                if renew {
+                    session.refresh_bearer(client, creds)
+                } else {
+                    session.bearer(client, creds)
+                }
+            },
+            in_time,
+            |bearer| send_json(client, verbose, url, body, bearer),
+        )?;
+        let (status, text) = match sent {
+            Ok(answer) => answer,
+            Err(e) if e.is_connect() => {
+                return Err(CliError::Upstream(format!(
+                    "foyer request: {}",
+                    e.without_url()
+                )))
+            }
+            Err(e) => return Ok(Written::NoAnswer(e.without_url().to_string())),
+        };
+        if status >= 500 {
+            return Ok(Written::NoAnswer(format!("HTTP {status}")));
+        }
+        match read_answer(status, &text, url) {
+            Ok(_) => Ok(Written::Answered),
+            Err(e) if (200..=299).contains(&status) => Ok(Written::NoAnswer(e.to_string())),
+            Err(e) => Err(e),
         }
     }
 
@@ -197,7 +231,7 @@ impl<'a> Foyer<'a> {
         let resp = req
             .body(body.to_vec())
             .send()
-            .map_err(|e| CliError::Upstream(format!("request: {e}")))?;
+            .map_err(|e| CliError::Upstream(format!("request: {}", e.without_url())))?;
         let status = resp.status().as_u16();
         let hdr = |name: &str| {
             resp.headers()
@@ -220,7 +254,7 @@ impl<'a> Foyer<'a> {
         }
         let bytes = resp
             .bytes()
-            .map_err(|e| CliError::Upstream(format!("reading response: {e}")))?
+            .map_err(|e| CliError::Upstream(format!("reading response: {}", e.without_url())))?
             .to_vec();
         if self.verbose {
             eprintln!("HTTP {status} ({} bytes)", bytes.len());
@@ -229,26 +263,80 @@ impl<'a> Foyer<'a> {
     }
 
     fn post(&self, url: &str, body: &Value, bearer: &str) -> Result<(u16, String), CliError> {
-        if self.verbose {
-            eprintln!("POST {url}");
-        }
-        let resp = self
-            .client
-            .post(url)
-            .bearer_auth(bearer)
-            .header(reqwest::header::CONTENT_TYPE, CONTENT_TYPE)
-            .header("X-User-Agent", X_USER_AGENT)
-            .body(body.to_string())
-            .send()
-            .map_err(|e| CliError::Upstream(format!("foyer request: {e}")))?;
-        let status = resp.status().as_u16();
-        let text = resp
-            .text()
-            .map_err(|e| CliError::Upstream(format!("reading foyer response: {e}")))?;
-        if self.verbose {
-            eprintln!("HTTP {status} ({} bytes)", text.len());
-        }
-        Ok((status, text))
+        self.send(url, body, bearer)
+            .map_err(|e| CliError::Upstream(format!("foyer request: {}", e.without_url())))
+    }
+
+    fn send(&self, url: &str, body: &Value, bearer: &str) -> Result<(u16, String), reqwest::Error> {
+        send_json(&self.client, self.verbose, url, body, bearer)
+    }
+}
+
+fn send_json(
+    client: &Client,
+    verbose: bool,
+    url: &str,
+    body: &Value,
+    bearer: &str,
+) -> Result<(u16, String), reqwest::Error> {
+    if verbose {
+        eprintln!("POST {url}");
+    }
+    let resp = client
+        .post(url)
+        .bearer_auth(bearer)
+        .header(reqwest::header::CONTENT_TYPE, CONTENT_TYPE)
+        .header("X-User-Agent", X_USER_AGENT)
+        .body(body.to_string())
+        .send()?;
+    let status = resp.status().as_u16();
+    let text = resp.text()?;
+    if verbose {
+        eprintln!("HTTP {status} ({} bytes)", text.len());
+    }
+    Ok((status, text))
+}
+
+/// A send with the bearer the session has, and once more with a new one if Google refuses that. Getting
+/// a bearer can wait on a keychain prompt or a lock, so `in_time` is asked after each one, right
+/// before its send.
+fn send_in_time<E>(
+    mut bearer: impl FnMut(bool) -> Result<String, CliError>,
+    in_time: &dyn Fn() -> Result<(), CliError>,
+    mut send: impl FnMut(&str) -> Result<(u16, String), E>,
+) -> Result<Result<(u16, String), E>, CliError> {
+    let first = bearer(false)?;
+    in_time()?;
+    let sent = send(&first);
+    if matches!(sent, Ok((401 | 403, _))) {
+        let renewed = bearer(true)?;
+        in_time()?;
+        return Ok(send(&renewed));
+    }
+    Ok(sent)
+}
+
+/// What a write got back from Google.
+#[derive(Debug)]
+pub enum Written {
+    /// It took the command. The echo does not say the device did (docs/api.md).
+    Answered,
+    /// The reason, with no URL.
+    NoAnswer(String),
+}
+
+fn read_answer(status: u16, text: &str, url: &str) -> Result<Value, CliError> {
+    match status {
+        200..=299 => serde_json::from_str(strip_xssi(text))
+            .map_err(|e| CliError::Upstream(format!("foyer returned non-JSON: {e}"))),
+        401 | 403 => Err(CliError::Auth(format!(
+            "foyer rejected the credential (HTTP {status}); run `ghome auth login` again"
+        ))),
+        404 => Err(CliError::NotFound(format!("HTTP 404 from foyer for {url}"))),
+        _ => Err(CliError::Upstream(format!(
+            "foyer HTTP {status}: {}",
+            snippet(text)
+        ))),
     }
 }
 
@@ -322,6 +410,58 @@ fn snippet(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::{Cell, RefCell};
+
+    /// `send_in_time` with a bearer that needs no keychain. What the sends got, for each answer.
+    fn sends(answers: &[u16], in_time: &dyn Fn() -> Result<(), CliError>) -> (Vec<String>, bool) {
+        let seen = RefCell::new(Vec::new());
+        let got = send_in_time(
+            |renew| Ok(if renew { "renewed" } else { "cached" }.to_string()),
+            in_time,
+            |bearer| {
+                let mut seen = seen.borrow_mut();
+                seen.push(bearer.to_string());
+                Ok::<_, CliError>((answers[seen.len() - 1], String::new()))
+            },
+        );
+        (seen.into_inner(), got.is_ok())
+    }
+
+    #[test]
+    fn a_refused_bearer_gets_one_more_send_with_a_new_one() {
+        let (seen, ok) = sends(&[401, 200], &|| Ok(()));
+        assert_eq!(seen, ["cached", "renewed"]);
+        assert!(ok);
+        let (seen, ok) = sends(&[200], &|| Ok(()));
+        assert_eq!(seen, ["cached"]);
+        assert!(ok);
+    }
+
+    #[test]
+    fn nothing_goes_out_once_the_time_is_up() {
+        let late = || Err(CliError::Upstream("late".into()));
+        let (seen, ok) = sends(&[200], &late);
+        assert!(seen.is_empty(), "{seen:?}");
+        assert!(!ok);
+    }
+
+    /// The mint after a refusal can wait on a keychain prompt, and the first send was refused, so
+    /// nothing has taken effect.
+    #[test]
+    fn a_mint_that_outlasts_the_time_sends_nothing_more() {
+        let asked = Cell::new(0);
+        let second_is_late = || {
+            asked.set(asked.get() + 1);
+            if asked.get() > 1 {
+                Err(CliError::Upstream("late".into()))
+            } else {
+                Ok(())
+            }
+        };
+        let (seen, ok) = sends(&[401, 200], &second_is_late);
+        assert_eq!(seen, ["cached"]);
+        assert!(!ok);
+    }
 
     #[test]
     fn paths_resolve_against_the_rpc_base() {

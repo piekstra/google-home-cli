@@ -1,0 +1,69 @@
+{
+  "manifest_version": "0.3",
+  "name": "ghome",
+  "display_name": "Google Home (ghome)",
+  "version": "0.9.0",
+  "description": "See and control the lights and plugs in your own Google Home, through the open-source ghome CLI.",
+  "long_description": "Ask Claude what is in your Google Home, whether a device is on, and to set one light, plug or wall switch, or the lights of one room. Four tools: ghome_devices and ghome_device_state read; ghome_device_set and ghome_room_lights change what you name, and Claude asks you before each call. No tool can reach a lock, a garage door, a heater, a camera or a speaker's volume, remove or rename a device, edit a room or a routine, make an announcement, or touch your account. The extension asks for no password: first install the ghome CLI and run `ghome auth login` in a terminal, which stores the credential in your OS keychain. The bundled ghome reads it from there and caches a short-lived token beside it. When the credential ends, the tools say so; run `ghome auth login` again. What the tools return goes to Claude as part of your conversation. On macOS the first call asks for keychain access, and a new token asks to write it back; choose Always Allow for each. A new version of the extension is a new program to the keychain and can ask again. Unofficial; not affiliated with or endorsed by Google. It uses the private API behind the Google Home app, which Google can change at any time.",
+  "author": {
+    "name": "piekstra",
+    "url": "https://github.com/piekstra"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/piekstra/google-home-cli"
+  },
+  "homepage": "https://github.com/piekstra/google-home-cli",
+  "documentation": "https://github.com/piekstra/google-home-cli#use-with-claude",
+  "support": "https://github.com/piekstra/google-home-cli/issues",
+  "license": "MIT",
+  "keywords": [
+    "google-home",
+    "smart-home",
+    "lights",
+    "plugs"
+  ],
+  "server": {
+    "type": "binary",
+    "entry_point": "server/ghome",
+    "mcp_config": {
+      "command": "${__dirname}/server/ghome",
+      "args": [
+        "mcp"
+      ],
+      "platform_overrides": {
+        "linux": {
+          "command": "${__dirname}/server/linux/ghome",
+          "args": [
+            "mcp"
+          ]
+        }
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "ghome_devices",
+      "description": "What devices you have: name, kind, room, online, and what the tools can change on each."
+    },
+    {
+      "name": "ghome_device_state",
+      "description": "Whether a device is on, with its brightness and color, and whether a lock is locked."
+    },
+    {
+      "name": "ghome_device_set",
+      "description": "Set one named light, plug or wall switch: on or off, brightness, color or color temperature, and return the state read back."
+    },
+    {
+      "name": "ghome_room_lights",
+      "description": "Set the lights of one named room, and nothing else in it, and return each light's state read back."
+    }
+  ],
+  "tools_generated": false,
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "linux"
+    ]
+  }
+}

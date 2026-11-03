@@ -34,6 +34,7 @@ not built), **blocked** (needs something we don't have yet), **idea**.
 | Device on/off, brightness, colour temperature, colour | done | `devices set`, `rooms set` (`UpdateTraits`); `--color` takes a name, `#rrggbb`, `rgb()` or `hsv()` and writes `color.colorRGB` |
 | Volume / mute, media play-pause-stop | done | `devices set --volume/--mute/--media` (`UpdateTraits`); verified on lights only so far |
 | Full device state read | done | `devices state` (`GetTraits`) |
+| MCP tools for Claude | done | `ghome mcp`: `ghome_devices`, `ghome_device_state` read; `ghome_device_set`, `ghome_room_lights` change a named light, plug, wall switch or room's lights, and return the state read back. Stdio, `.mcpb`, and `--http` for your own Worker. Offline tests only so far: not yet run against a real home |
 | Lock / unlock with PIN challenge | planned | `UpdateTraits` `lockUnlock`, `pin` on `pinNeeded` |
 | Thermostat setpoint / mode | idea | `UpdateTraits` `temperatureSetting` |
 
@@ -61,6 +62,6 @@ not built), **blocked** (needs something we don't have yet), **idea**.
 |---|---|---|
 | Browser-handoff login, keychain credential, cached bearer | done | `auth login` |
 | Raw RPC passthrough | done | `api POST <Service>/<Method> --data '[...]'`; `--proto <base64>` sends serialized protobuf, `--grpc-web` frames it |
-| Public repo, releases, self-update | done | release on version bump |
+| Public repo, releases, self-update | done | release on pushing tag `v<version>` (draft, then published once every asset is attached) |
 | Vendor CLIs on the family spec | done | govee-cli #20 and tplink-cloud-cli #3 (2026-09-10): text default + `--json`, family exit codes, `auth`/`config`/`self-update`/`info`, `piekstra.<bin>` keychain with migration; cli-common v0.8.0 carries the shared confirm gate, `pick` resolver, `emit_list`, keychain JSON items and the `device-rooms/v1` contract |
 | Broadcast via local Cast (no Google auth) | done | `src/cast.rs`: mDNS `_googlecast._tcp` + CastMessage v2 over TLS 8009, Default Media Receiver; `announce` uses it by default |

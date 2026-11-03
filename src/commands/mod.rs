@@ -34,13 +34,7 @@ pub struct Ctx<'a> {
 impl<'a> Ctx<'a> {
     /// The stored session, or exit 3 with a pointer at `auth login`.
     pub fn session(&self) -> Result<Session, CliError> {
-        let email = self.cfg.username.clone().ok_or_else(|| {
-            CliError::Auth("no Google account configured; run `ghome auth login`".into())
-        })?;
-        let android_id = self.cfg.android_id.clone().ok_or_else(|| {
-            CliError::Auth("no device identity stored; run `ghome auth login`".into())
-        })?;
-        Session::load(self.creds, &email, &android_id)
+        Session::for_config(self.creds, &self.cfg)
     }
 
     pub fn http(&self) -> Result<reqwest::blocking::Client, CliError> {

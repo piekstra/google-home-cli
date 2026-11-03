@@ -133,6 +133,19 @@ echoes the device with its resulting traits; an immediate `GetTraits` still
 shows the previous state for a second or so, so `ghome` prefers the echo and
 otherwise waits before reading. Verified live 2026-09-09 (on/off).
 
+### What the MCP tools send (`src/mcp.rs`)
+
+The tools use `GetHomeGraph`, `GetTraits` and `UpdateTraits`, and nothing else in Foyer. `UpdateTraits` carries only
+`onOff`, `brightness` and `color`, one entry per device, and `ghome_room_lights` sends its lights in one request.
+
+Traps a tool has to allow for:
+
+- `UpdateTraits`'s answer is not the device's state, and a read straight after it can show the old value, so a write
+  reads `GetTraits` about 1.5 and 4.5 seconds later.
+- A device's `kind` is the vendor's, and `assigned_kind` (`Device[20]`) is what the user typed. A plug with a heater
+  on it is `OUTLET` and `HEATER`, so a write checks both. A Lock a user typed as a light is `LOCK` and `LIGHT`.
+- The codec is total, so a changed `GetHomeGraph` reads as no homes. A tool treats that as an error, not an empty house.
+
 ## Routines — `AutomationService`
 
 `ListAutomations` `["<structure>"]` → `[[ [id, ?, manuallyRunnable(0|1),
