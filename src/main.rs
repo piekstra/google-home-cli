@@ -384,6 +384,7 @@ fn auth(cli: &Cli, cmd: &AuthCmd, ctx: &Ctx) -> Result<(), CliError> {
         }
         AuthCmd::Status => unreachable!("handled above"),
         AuthCmd::Logout(args) => {
+            let had_account = cfg.username.is_some();
             match cfg.username.clone() {
                 // The delete runs with or without the lock; a mint in flight must not store the
                 // credential again behind it.
@@ -415,12 +416,17 @@ fn auth(cli: &Cli, cmd: &AuthCmd, ctx: &Ctx) -> Result<(), CliError> {
             }
             if !cli.common.quiet {
                 if args.forget {
-                    eprintln!("logged out; connector token removed; config cleared");
-                } else {
                     eprintln!(
-                        "logged out. The connector token of `ghome mcp --http` is still stored; \
-                         use `ghome auth logout --forget` to remove it too."
+                        "{}; any connector token removed from the keychain (a running `ghome mcp \
+                         --http` keeps its own until it stops); config cleared",
+                        if had_account {
+                            "logged out"
+                        } else {
+                            "nothing to log out of"
+                        }
                     );
+                } else {
+                    eprintln!("logged out");
                 }
             }
             Ok(())

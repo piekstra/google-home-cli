@@ -96,7 +96,8 @@ impl Session {
                 },
             ),
             // Legacy layout: bare master token here, bearer in its own item.
-            // Migrate to the single item and drop the second one.
+            // Migrate to the single item and drop the second one. A server runs this too, so the
+            // write takes the guard a mint does, and a logout during that read stays a logout.
             Err(_) => {
                 let master = Secret::new(raw.expose().to_string());
                 let bearer = creds
@@ -108,7 +109,7 @@ impl Session {
                     master,
                     bearer,
                 };
-                s.persist(creds)?;
+                s.cache_bearer(creds)?;
                 let _ = creds.delete(&bearer_account(email));
                 return Ok(s);
             }

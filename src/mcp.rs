@@ -17,7 +17,7 @@
 
 use std::cell::RefCell;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use pk_cli_config::ConfigStore;
 use pk_cli_core::CliError;
@@ -63,6 +63,22 @@ const SEND_DEADLINE: Duration = Duration::from_secs(60);
 /// No read-back starts this long after the call began. One can take two requests, if its bearer
 /// was refused, and that and the wait before it still end inside the 120 s.
 const READ_BACK_DEADLINE: Duration = Duration::from_secs(85);
+
+/// When a call began, on both clocks. `Instant` stops while a Mac sleeps, so a keychain prompt
+/// answered the next morning would read as seconds later on it. The wall clock runs on, and one
+/// that moved backwards says nothing, which leaves the `Instant`.
+#[derive(Debug, Clone, Copy)]
+struct CallStart {
+    monotonic: Instant,
+    wall: SystemTime,
+}
+
+impl CallStart {
+    fn elapsed(&self, wall_now: SystemTime) -> Duration {
+        let wall = wall_now.duration_since(self.wall).unwrap_or_default();
+        self.monotonic.elapsed().max(wall)
+    }
+}
 
 /// Everything a tool can send to a device. Closed: volume, mute and media, which
 /// [`traits::Change`] also carries, are out of a tool's reach.
@@ -125,7 +141,13 @@ pub trait Platform {
     fn homes(&self) -> Result<Vec<Home>, CliError>;
     /// `{id: {trait: {field: value}}}`. A device missing from the map reported nothing.
     fn states(&self, ids: &[&str]) -> Result<Map<String, Value>, CliError>;
-    fn update(&self, devices: &[&Device], wanted: &Wanted) -> Result<Sent, CliError>;
+    /// Sends one command, unless `in_time` answers an error right before it goes.
+    fn update(
+        &self,
+        devices: &[&Device],
+        wanted: &Wanted,
+        in_time: &dyn Fn() -> Result<(), CliError>,
+    ) -> Result<Sent, CliError>;
 }
 
 /// What a call opens, so the tests run offline.
@@ -141,6 +163,10 @@ pub trait Source {
     /// How long after a call began a read-back may still start.
     fn read_back_deadline(&self) -> Duration {
         READ_BACK_DEADLINE
+    }
+    /// The time of day, for [`CallStart`].
+    fn wall_clock(&self) -> SystemTime {
+        SystemTime::now()
     }
 }
 
@@ -197,12 +223,18 @@ impl Platform for LivePlatform {
         Ok(out)
     }
 
-    fn update(&self, devices: &[&Device], wanted: &Wanted) -> Result<Sent, CliError> {
+    fn update(
+        &self,
+        devices: &[&Device],
+        wanted: &Wanted,
+        in_time: &dyn Fn() -> Result<(), CliError>,
+    ) -> Result<Sent, CliError> {
         let mut session = self.session.borrow_mut();
         let mut foyer = Foyer::new(self.http.clone(), &mut session, &self.creds, false);
         let written = foyer.write(
             &self.url(traits::SERVICE, traits::UPDATE_TRAITS),
             &traits::update_traits(devices, &wanted.change()),
+            in_time,
         )?;
         Ok(match written {
             Written::Answered => Sent::Accepted,
@@ -652,14 +684,15 @@ impl<S: Source> GhomeTools<S> {
     /// Resolve one device by its full name or id, check it may and can take the change, send it,
     /// and read the result back.
     fn set_device(&self, query: &str, wanted: Wanted) -> Result<ToolOutput, ToolError> {
-        let started = Instant::now();
+        let started = self.started();
         let api = self.source.open().map_err(tool_err)?;
         let homes = api.homes().map_err(tool_err)?;
         let all = all_devices(&homes);
         let device = named_device(&all, query).map_err(tool_err)?;
         check_may_change(device, &wanted).map_err(tool_err)?;
-        self.check_in_time(started).map_err(tool_err)?;
-        let sent = api.update(&[device], &wanted).map_err(tool_err)?;
+        let sent = api
+            .update(&[device], &wanted, &|| self.check_in_time(started))
+            .map_err(tool_err)?;
         let read = self.read_back(&api, &homes, &[device], &wanted, started);
         let mut states = read.states;
         let device_state = states.pop().expect("one device was read");
@@ -682,7 +715,7 @@ impl<S: Source> GhomeTools<S> {
     /// The lights of one room named in full, and only those. A room is the one group a tool
     /// reaches: the name is the user's, and one call stops at its walls.
     fn set_room(&self, query: &str, wanted: Wanted) -> Result<ToolOutput, ToolError> {
-        let started = Instant::now();
+        let started = self.started();
         let api = self.source.open().map_err(tool_err)?;
         let homes = api.homes().map_err(tool_err)?;
         let (home, room) = named_room(&homes, query).map_err(tool_err)?;
@@ -701,8 +734,9 @@ impl<S: Source> GhomeTools<S> {
                 room.name
             ))));
         }
-        self.check_in_time(started).map_err(tool_err)?;
-        let sent = api.update(&targets, &wanted).map_err(tool_err)?;
+        let sent = api
+            .update(&targets, &wanted, &|| self.check_in_time(started))
+            .map_err(tool_err)?;
         let read = self.read_back(&api, &homes, &targets, &wanted, started);
         let lights: Vec<RoomLight> = read
             .states
@@ -728,9 +762,16 @@ impl<S: Source> GhomeTools<S> {
         })
     }
 
-    fn check_in_time(&self, started: Instant) -> Result<(), CliError> {
+    fn started(&self) -> CallStart {
+        CallStart {
+            monotonic: Instant::now(),
+            wall: self.source.wall_clock(),
+        }
+    }
+
+    fn check_in_time(&self, started: CallStart) -> Result<(), CliError> {
         let deadline = self.source.send_deadline();
-        if started.elapsed() < deadline {
+        if started.elapsed(self.source.wall_clock()) < deadline {
             return Ok(());
         }
         Err(CliError::Upstream(format!(
@@ -749,14 +790,14 @@ impl<S: Source> GhomeTools<S> {
         homes: &[Home],
         devices: &[&Device],
         wanted: &Wanted,
-        started: Instant,
+        started: CallStart,
     ) -> ReadBack {
         let ids: Vec<&str> = devices.iter().map(|d| d.id.as_str()).collect();
         let empty = json!({});
         let mut latest: Option<Map<String, Value>> = None;
         let mut failure = None;
         for wait in READ_BACK_WAITS {
-            if started.elapsed() >= self.source.read_back_deadline() {
+            if started.elapsed(self.source.wall_clock()) >= self.source.read_back_deadline() {
                 failure.get_or_insert(CliError::Upstream(
                     "there was no time left to read it".into(),
                 ));

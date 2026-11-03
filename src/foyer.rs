@@ -106,16 +106,27 @@ impl<'a> Foyer<'a> {
     /// send it twice. A connection that never opened sent nothing, and a refusal is a refusal,
     /// and both stay errors. Any other failure may have come after Google took the command, so
     /// it is [`Written::NoAnswer`].
-    pub fn write(&mut self, url: &str, body: &Value) -> Result<Written, CliError> {
-        let bearer = self.session.bearer(&self.client, self.creds)?;
-        let sent = self.send(url, body, &bearer);
-        let sent = match sent {
-            Ok((401 | 403, _)) => {
-                let bearer = self.session.refresh_bearer(&self.client, self.creds)?;
-                self.send(url, body, &bearer)
-            }
-            other => other,
-        };
+    ///
+    /// `in_time` can stop it before each send: nothing goes out once it answers an error.
+    pub fn write(
+        &mut self,
+        url: &str,
+        body: &Value,
+        in_time: &dyn Fn() -> Result<(), CliError>,
+    ) -> Result<Written, CliError> {
+        let (client, creds, verbose) = (&self.client, self.creds, self.verbose);
+        let session = &mut *self.session;
+        let sent = send_in_time(
+            |renew| {
+                if renew {
+                    session.refresh_bearer(client, creds)
+                } else {
+                    session.bearer(client, creds)
+                }
+            },
+            in_time,
+            |bearer| send_json(client, verbose, url, body, bearer),
+        )?;
         let (status, text) = match sent {
             Ok(answer) => answer,
             Err(e) if e.is_connect() => {
@@ -257,24 +268,52 @@ impl<'a> Foyer<'a> {
     }
 
     fn send(&self, url: &str, body: &Value, bearer: &str) -> Result<(u16, String), reqwest::Error> {
-        if self.verbose {
-            eprintln!("POST {url}");
-        }
-        let resp = self
-            .client
-            .post(url)
-            .bearer_auth(bearer)
-            .header(reqwest::header::CONTENT_TYPE, CONTENT_TYPE)
-            .header("X-User-Agent", X_USER_AGENT)
-            .body(body.to_string())
-            .send()?;
-        let status = resp.status().as_u16();
-        let text = resp.text()?;
-        if self.verbose {
-            eprintln!("HTTP {status} ({} bytes)", text.len());
-        }
-        Ok((status, text))
+        send_json(&self.client, self.verbose, url, body, bearer)
     }
+}
+
+fn send_json(
+    client: &Client,
+    verbose: bool,
+    url: &str,
+    body: &Value,
+    bearer: &str,
+) -> Result<(u16, String), reqwest::Error> {
+    if verbose {
+        eprintln!("POST {url}");
+    }
+    let resp = client
+        .post(url)
+        .bearer_auth(bearer)
+        .header(reqwest::header::CONTENT_TYPE, CONTENT_TYPE)
+        .header("X-User-Agent", X_USER_AGENT)
+        .body(body.to_string())
+        .send()?;
+    let status = resp.status().as_u16();
+    let text = resp.text()?;
+    if verbose {
+        eprintln!("HTTP {status} ({} bytes)", text.len());
+    }
+    Ok((status, text))
+}
+
+/// A send with the bearer the session has, and once more with a new one if Google refuses that. Getting
+/// a bearer can wait on a keychain prompt or a lock, so `in_time` is asked after each one, right
+/// before its send.
+fn send_in_time<E>(
+    mut bearer: impl FnMut(bool) -> Result<String, CliError>,
+    in_time: &dyn Fn() -> Result<(), CliError>,
+    mut send: impl FnMut(&str) -> Result<(u16, String), E>,
+) -> Result<Result<(u16, String), E>, CliError> {
+    let first = bearer(false)?;
+    in_time()?;
+    let sent = send(&first);
+    if matches!(sent, Ok((401 | 403, _))) {
+        let renewed = bearer(true)?;
+        in_time()?;
+        return Ok(send(&renewed));
+    }
+    Ok(sent)
 }
 
 /// What a write got back from Google.
@@ -371,6 +410,58 @@ fn snippet(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::{Cell, RefCell};
+
+    /// `send_in_time` with a bearer that needs no keychain. What the sends got, for each answer.
+    fn sends(answers: &[u16], in_time: &dyn Fn() -> Result<(), CliError>) -> (Vec<String>, bool) {
+        let seen = RefCell::new(Vec::new());
+        let got = send_in_time(
+            |renew| Ok(if renew { "renewed" } else { "cached" }.to_string()),
+            in_time,
+            |bearer| {
+                let mut seen = seen.borrow_mut();
+                seen.push(bearer.to_string());
+                Ok::<_, CliError>((answers[seen.len() - 1], String::new()))
+            },
+        );
+        (seen.into_inner(), got.is_ok())
+    }
+
+    #[test]
+    fn a_refused_bearer_gets_one_more_send_with_a_new_one() {
+        let (seen, ok) = sends(&[401, 200], &|| Ok(()));
+        assert_eq!(seen, ["cached", "renewed"]);
+        assert!(ok);
+        let (seen, ok) = sends(&[200], &|| Ok(()));
+        assert_eq!(seen, ["cached"]);
+        assert!(ok);
+    }
+
+    #[test]
+    fn nothing_goes_out_once_the_time_is_up() {
+        let late = || Err(CliError::Upstream("late".into()));
+        let (seen, ok) = sends(&[200], &late);
+        assert!(seen.is_empty(), "{seen:?}");
+        assert!(!ok);
+    }
+
+    /// The mint after a refusal can wait on a keychain prompt, and the first send was refused, so
+    /// nothing has taken effect.
+    #[test]
+    fn a_mint_that_outlasts_the_time_sends_nothing_more() {
+        let asked = Cell::new(0);
+        let second_is_late = || {
+            asked.set(asked.get() + 1);
+            if asked.get() > 1 {
+                Err(CliError::Upstream("late".into()))
+            } else {
+                Ok(())
+            }
+        };
+        let (seen, ok) = sends(&[401, 200], &second_is_late);
+        assert_eq!(seen, ["cached"]);
+        assert!(!ok);
+    }
 
     #[test]
     fn paths_resolve_against_the_rpc_base() {

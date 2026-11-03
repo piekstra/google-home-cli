@@ -45,6 +45,9 @@ struct Fake {
     open_takes: Cell<Duration>,
     send_deadline: Cell<Option<Duration>>,
     out_of_time: Cell<bool>,
+    /// How far the wall clock moves during `open`, as a Mac asleep through a prompt.
+    slept_in_open: Cell<Duration>,
+    wall_moved: Cell<Duration>,
 }
 
 type Tools = GhomeTools<Rc<Fake>>;
@@ -91,7 +94,13 @@ impl Platform for Rc<Fake> {
         answer.map_err(CliError::Upstream)
     }
 
-    fn update(&self, devices: &[&Device], wanted: &Wanted) -> Result<Sent, CliError> {
+    fn update(
+        &self,
+        devices: &[&Device],
+        wanted: &Wanted,
+        in_time: &dyn Fn() -> Result<(), CliError>,
+    ) -> Result<Sent, CliError> {
+        in_time()?;
         if self.update_fails.get() {
             return Err(CliError::Upstream("Google refused it".into()));
         }
@@ -110,6 +119,7 @@ impl Source for Rc<Fake> {
     fn open(&self) -> Result<Rc<Fake>, CliError> {
         self.opened.set(self.opened.get() + 1);
         std::thread::sleep(self.open_takes.get());
+        self.wall_moved.set(self.slept_in_open.get());
         if let Some(e) = self.open_fails.borrow_mut().take() {
             return Err(e);
         }
@@ -122,6 +132,10 @@ impl Source for Rc<Fake> {
 
     fn send_deadline(&self) -> Duration {
         self.send_deadline.get().unwrap_or(SEND_DEADLINE)
+    }
+
+    fn wall_clock(&self) -> SystemTime {
+        SystemTime::now() + self.wall_moved.get()
     }
 
     fn read_back_deadline(&self) -> Duration {
@@ -790,6 +804,27 @@ fn a_call_that_reaches_the_command_past_the_deadline_sends_nothing() {
     }
 }
 
+/// `Instant` stands still while a Mac sleeps, so only the wall clock sees this night pass.
+#[test]
+fn a_mac_that_slept_through_the_prompt_sends_nothing() {
+    let (tools, fake) = home();
+    fake.slept_in_open.set(Duration::from_secs(8 * 60 * 60));
+    let text = failed(&tools, SET_TOOL, json!({"device": LAMP, "power": "off"}));
+    assert!(text.contains("nothing was sent"), "{text}");
+    assert_eq!(fake.sent(), []);
+}
+
+#[test]
+fn a_wall_clock_that_moved_back_leaves_the_monotonic_one() {
+    let started = CallStart {
+        monotonic: Instant::now(),
+        wall: SystemTime::now(),
+    };
+    let hour = Duration::from_secs(60 * 60);
+    assert!(started.elapsed(started.wall - hour) < hour);
+    assert!(started.elapsed(started.wall + hour) >= hour);
+}
+
 /// The sums the comments on the deadlines make, held to the limit they name.
 #[test]
 fn a_write_can_answer_inside_the_http_limit() {
@@ -1202,6 +1237,25 @@ fn a_lost_answer_the_state_does_not_settle_names_no_url() {
     let note = got["note"].as_str().unwrap();
     assert!(note.contains("may or may not have taken effect"), "{note}");
     assert!(!note.contains("127.0.0.1"), "{note}");
+}
+
+/// The deadline reaches the transport, because a bearer can need minting after the list, and that
+/// can wait on a prompt. `Foyer`'s own tests hold the send after a re-mint.
+#[test]
+fn the_live_path_sends_nothing_once_the_time_is_up() {
+    let (url, stub) = stub_foyer();
+    let source = StubSource { url, home: None };
+    let api = source.open().unwrap();
+    let homes = api.homes().unwrap();
+    let lamp = homes[0].devices.iter().find(|d| d.name == LAMP).unwrap();
+    let wanted = Wanted {
+        on: Some(true),
+        ..Wanted::default()
+    };
+    let late = || Err(CliError::Upstream("late".into()));
+    assert!(api.update(&[lamp], &wanted, &late).is_err());
+    let stub = stub.lock().unwrap();
+    assert!(!stub.seen.iter().any(|(method, _)| method == "UpdateTraits"));
 }
 
 /// Google saying no is an answer, and it is not a lost one.

@@ -13,10 +13,13 @@
 - Releases are cut by pushing a tag, no longer by merging a version bump. They attach `ghome-<version>.mcpb`, a Claude
   Desktop extension, and a release is published only once every asset is there.
 - `self-update` says to restart a running `ghome mcp --http` and to install the new `.mcpb`.
-- A minted bearer is cached under a lock every `ghome` process shares, and only over the master token it came from, so a
-  server minting during `auth logout --forget` or `auth login --overwrite` cannot put a removed credential back. A login
-  waits for a mint in flight.
-- `auth logout --forget` also removes the connector token, and plain `auth logout` says it keeps it. A token it cannot
-  remove still lets it clear the config, and it then says so and exits nonzero.
+- A minted bearer, and the move of a legacy keychain item to the one-item layout, are written under a lock every `ghome`
+  process shares, and only over the master token they came from, so a server running during `auth logout --forget` or
+  `auth login --overwrite` cannot put a removed credential back. A login waits for a mint in flight.
+- `auth logout --forget` also removes the connector token from the keychain, and says a running `ghome mcp --http` keeps
+  its own until it stops. A token it cannot remove still lets it clear the config, and it then says so and exits nonzero.
+- `auth logout --forget` with no account configured now clears the connector token and the config and exits 0, where it
+  was a usage error (exit 2), because a connector token can outlive an account. Plain `auth logout` with no account is
+  still exit 2.
 - A failure that got no answer from Google no longer prints its URL.
 - cli-common v0.23.0, up from v0.15.1. The minimum Rust version is 1.89.

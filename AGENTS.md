@@ -82,8 +82,8 @@ command's own answer was lost (`Sent::NoAnswer`). A room is the one group a tool
 removes, renames or moves a device, edits a room or a routine, announces, sets volume or media, locks or unlocks,
 or reaches `ghome api`, whatever the CLI can do. `GetHomeGraph` carries the address, linked users, partner ids and
 `local_auth_token`: `read_state` and `device_item` copy named fields only, and must go on doing so. Each request waits
-15 s, no command goes out 60 s after the call began (`SEND_DEADLINE`, which also covers a keychain prompt answered
-late), and no read-back starts after 85 s, so a write answers inside `--http`'s 120 s.
+15 s, no command goes out 60 s after the call began (`SEND_DEADLINE`, asked right before each send through `Foyer::write`,
+because a mint can wait on a keychain prompt), and no read-back starts after 85 s, so a write answers inside `--http`'s 120 s.
 
 This crate pins cli-common **v0.23.0**, the spec it conforms to.
 
