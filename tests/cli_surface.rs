@@ -297,6 +297,19 @@ fn completions_render_for_zsh() {
         .stdout(predicate::str::contains("#compdef ghome"));
 }
 
+/// Any non-empty `NO_COLOR` disables color (no-color.org); none of the
+/// conventional values may turn into a usage error.
+#[test]
+fn no_color_in_the_environment_never_fails_a_command() {
+    for v in ["1", "true", "0", ""] {
+        ghome()
+            .env("NO_COLOR", v)
+            .args(["completions", "bash"])
+            .assert()
+            .success();
+    }
+}
+
 /// The repo must carry no personal data (SPEC §1.7). Scan tracked files for
 /// shapes — real-looking emails, UUIDs, and tokens — never a denylist of real
 /// values. Runtime output may carry them; git may not.
