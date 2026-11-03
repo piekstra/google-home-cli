@@ -445,8 +445,13 @@ pub(crate) mod tests {
         (url, hits)
     }
 
+    /// The stubs close after each answer, so the client must not keep a connection for the next
+    /// hop, which on one host it otherwise would.
     fn redirect_to(place: &str) -> String {
-        format!("HTTP/1.1 307 Temporary Redirect\r\nLocation: {place}\r\nContent-Length: 0\r\n\r\n")
+        format!(
+            "HTTP/1.1 307 Temporary Redirect\r\nLocation: {place}\r\nConnection: close\r\n\
+             Content-Length: 0\r\n\r\n"
+        )
     }
 
     /// `write` with a bearer that needs no mint, and a keychain nothing here reaches.
@@ -462,8 +467,9 @@ pub(crate) mod tests {
     #[test]
     fn a_write_refused_a_redirect_off_its_host_is_a_failure() {
         use std::sync::atomic::Ordering;
-        let (elsewhere, arrived) =
-            counting_stub("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n[]".into());
+        let (elsewhere, arrived) = counting_stub(
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 2\r\n\r\n[]".into(),
+        );
         let (first, _) = counting_stub(redirect_to(&format!("{elsewhere}/x")));
         let text = write_to(&first).unwrap_err().to_string();
         assert!(text.contains("another host"), "{text}");
@@ -488,7 +494,8 @@ pub(crate) mod tests {
                     redirect_to("/second")
                 } else {
                     reached.fetch_add(1, Ordering::SeqCst);
-                    "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n[]".to_string()
+                    "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 2\r\n\r\n[]"
+                        .to_string()
                 };
                 let _ = stream.write_all(answer.as_bytes());
             }
