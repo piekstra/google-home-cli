@@ -2,7 +2,7 @@
 name = "google-home-cli"
 version = "0.8.1"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Google Home from the terminal: audit and fix rooms, control devices, and manage the home graph over the app's private API. Keychain-secured, agent-friendly."
 license = "MIT"
 repository = "https://github.com/piekstra/google-home-cli"
