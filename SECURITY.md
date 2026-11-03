@@ -14,6 +14,9 @@ security page invalidates it server-side.
 `ghome` fetches `GetHomeGraph`, which includes a per-device `local_auth_token`.
 The CLI never reads, prints, or stores that slot.
 
+No credential follows a redirect off its host, and `ghome api` sends the bearer only over `https`, or plain
+`http` to this machine.
+
 `ghome` speaks Google's private API with an Android master token, neither of which Google offers for this; see the
 README's note.
 

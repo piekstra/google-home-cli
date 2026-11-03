@@ -10,9 +10,10 @@
 //! belongs to a different Google project than the Android app the bearer is
 //! minted for, and Foyer rejects the mismatch with HTTP 400 `CONSUMER_INVALID`.
 
+use pk_cli_core::transport::same_host_redirects;
 use pk_cli_core::CliError;
 use pk_cli_secrets::CredentialStore;
-use reqwest::blocking::Client;
+use reqwest::blocking::{Client, ClientBuilder};
 use serde_json::Value;
 
 use crate::session::Session;
@@ -28,6 +29,13 @@ pub const HOME_DEVICES: &str = "HomeDevicesService";
 pub const LIST_UNASSIGNED_DEVICES: &str = "ListUnassignedDevices";
 pub const HOME_CONTROL: &str = "HomeControlService";
 pub const GET_TRAITS: &str = "GetTraits";
+
+/// The client a credential goes out on: a bearer to Foyer, or a master or oauth token in a form
+/// to Google's auth endpoint. A 307 or 308 would re-send that form, and reqwest strips no body, so
+/// a redirect stays on its host.
+pub fn client_builder() -> ClientBuilder {
+    pk_cli_http::builder(crate::BIN, env!("CARGO_PKG_VERSION")).redirect(same_host_redirects())
+}
 
 /// Resolve an `api` path against the RPC base: `Service/Method` (with or
 /// without a leading slash) or a full URL.
@@ -410,6 +418,45 @@ fn snippet(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A server on 127.0.0.1 answering each request with `answer`, and how many arrived.
+    fn counting_stub(answer: String) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{Read, Write};
+        use std::sync::atomic::Ordering;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = hits.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                let mut buf = [0u8; 8192];
+                let _ = stream.read(&mut buf);
+                seen.fetch_add(1, Ordering::SeqCst);
+                let _ = stream.write_all(answer.as_bytes());
+            }
+        });
+        (url, hits)
+    }
+
+    /// A 307 re-sends the body, and a form to Google's auth endpoint holds a master token.
+    #[test]
+    fn a_credential_in_a_body_does_not_follow_a_redirect_to_another_host() {
+        use std::sync::atomic::Ordering;
+        let (elsewhere, arrived) =
+            counting_stub("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".into());
+        let (first, _) = counting_stub(format!(
+            "HTTP/1.1 307 Temporary Redirect\r\nLocation: {elsewhere}/x\r\nContent-Length: 0\r\n\r\n"
+        ));
+        let sent = client_builder()
+            .build()
+            .unwrap()
+            .post(&first)
+            .form(&[("Token", "dummy")])
+            .send();
+        assert!(sent.is_err());
+        assert_eq!(arrived.load(Ordering::SeqCst), 0);
+    }
     use std::cell::{Cell, RefCell};
 
     /// `send_in_time` with a bearer that needs no keychain. What the sends got, for each answer.

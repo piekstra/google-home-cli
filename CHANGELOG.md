@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.1 — 2026-11-03
+
+- **Security fix:** `ghome api` refuses a plain `http` URL off this machine with exit 2, before it reads
+  a credential. A full `http://` URL sent the bearer in the clear.
+- **Security fix:** no client that carries a credential follows a redirect off its host. A 307 or 308
+  re-sends a body, and a form to Google's auth endpoint holds a master token or an oauth token. A redirect
+  to another host is now an error.
+- A write's deadlines are now cli-common's `SendDeadline`, with the same 60 s to send and 85 s to start a
+  read-back, on both clocks. Its refusal is an `other` error in place of `upstream`, since Google did not
+  fail, and it tells the caller to check the current state before calling again.
+- cli-common v0.25.0, up from v0.23.0.
+
 ## 0.9.0 — 2026-11-03
 
 - `ghome mcp`: tools for Claude. `ghome_devices` and `ghome_device_state` read; `ghome_device_set` changes one light,

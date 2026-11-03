@@ -38,7 +38,9 @@ impl<'a> Ctx<'a> {
     }
 
     pub fn http(&self) -> Result<reqwest::blocking::Client, CliError> {
-        pk_cli_http::client(crate::BIN, env!("CARGO_PKG_VERSION"))
+        crate::foyer::client_builder()
+            .build()
+            .map_err(|e| CliError::Other(format!("failed to build HTTP client: {e}")))
     }
 
     /// Fetch and parse the home graph.

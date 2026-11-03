@@ -178,6 +178,23 @@ fn audit_rejects_a_bad_expect_file_before_any_credential() {
 }
 
 #[test]
+fn api_refuses_plain_http_off_this_machine_before_any_credential() {
+    // The bearer goes with the request.
+    ghome()
+        .args([
+            "--json",
+            "api",
+            "POST",
+            "http://example.com/x",
+            "--data",
+            "[]",
+        ])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("only https is allowed"));
+}
+
+#[test]
 fn api_validates_method_and_body_shape_before_any_credential() {
     let out = ghome()
         .args(["--json", "api", "GET", "StructuresService/GetHomeGraph"])
