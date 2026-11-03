@@ -3,6 +3,7 @@
 //! array (or a full URL for endpoints outside the RPC base).
 
 use clap::Args;
+use pk_cli_core::transport::require_secure_url;
 use pk_cli_core::{output, CliError};
 use pk_cli_http::ApiArgs;
 use serde_json::{json, Value};
@@ -40,6 +41,9 @@ pub enum Body {
 /// Validate before touching the keychain: Foyer only speaks POST, and only
 /// takes array bodies.
 pub fn validate(args: &RawArgs) -> Result<Body, CliError> {
+    // A full URL may name any `https` host, since the user chose it, but the bearer goes with the
+    // request, so never plain http off this machine.
+    require_secure_url(&foyer::url_for(&args.api.path))?;
     let method = args.api.parsed_method()?;
     if method != reqwest::Method::POST {
         return Err(CliError::Usage(

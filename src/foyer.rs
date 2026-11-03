@@ -10,9 +10,10 @@
 //! belongs to a different Google project than the Android app the bearer is
 //! minted for, and Foyer rejects the mismatch with HTTP 400 `CONSUMER_INVALID`.
 
+use pk_cli_core::transport::same_host_redirects;
 use pk_cli_core::CliError;
 use pk_cli_secrets::CredentialStore;
-use reqwest::blocking::Client;
+use reqwest::blocking::{Client, ClientBuilder};
 use serde_json::Value;
 
 use crate::session::Session;
@@ -28,6 +29,13 @@ pub const HOME_DEVICES: &str = "HomeDevicesService";
 pub const LIST_UNASSIGNED_DEVICES: &str = "ListUnassignedDevices";
 pub const HOME_CONTROL: &str = "HomeControlService";
 pub const GET_TRAITS: &str = "GetTraits";
+
+/// The client a credential goes out on: a bearer to Foyer, or a master or oauth token in a form
+/// to Google's auth endpoint. A 307 or 308 would re-send that form, and reqwest strips no body, so
+/// a redirect stays on its host.
+pub fn client_builder() -> ClientBuilder {
+    pk_cli_http::builder(crate::BIN, env!("CARGO_PKG_VERSION")).redirect(same_host_redirects())
+}
 
 /// Resolve an `api` path against the RPC base: `Service/Method` (with or
 /// without a leading slash) or a full URL.
@@ -103,8 +111,8 @@ impl<'a> Foyer<'a> {
     }
 
     /// [`call`](Self::call) for a command that changes a device, for a caller that must not
-    /// send it twice. A connection that never opened sent nothing, and a refusal is a refusal,
-    /// and both stay errors. Any other failure may have come after Google took the command, so
+    /// send it twice. A connection that never opened sent nothing, a refusal is a refusal, and a
+    /// redirect this refused took no command, and all three stay errors. Any other failure may have come after Google took the command, so
     /// it is [`Written::NoAnswer`].
     ///
     /// `in_time` can stop it before each send: nothing goes out once it answers an error.
@@ -135,6 +143,8 @@ impl<'a> Foyer<'a> {
                     e.without_url()
                 )))
             }
+            // Google answered with the redirect and took no command, and this keeps the reason.
+            Err(e) if e.is_redirect() => return Err(e.into()),
             Err(e) => return Ok(Written::NoAnswer(e.without_url().to_string())),
         };
         if status >= 500 {
@@ -228,10 +238,12 @@ impl<'a> Foyer<'a> {
             BinaryMode::GrpcWeb => req = req.header("X-Grpc-Web", "1"),
             BinaryMode::Proto => {}
         }
-        let resp = req
-            .body(body.to_vec())
-            .send()
-            .map_err(|e| CliError::Upstream(format!("request: {}", e.without_url())))?;
+        let resp = req.body(body.to_vec()).send().map_err(|e| {
+            if e.is_redirect() {
+                return CliError::from(e);
+            }
+            CliError::Upstream(format!("request: {}", e.without_url()))
+        })?;
         let status = resp.status().as_u16();
         let hdr = |name: &str| {
             resp.headers()
@@ -408,8 +420,109 @@ fn snippet(text: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// A server on 127.0.0.1 answering each request with `answer`, and how many arrived.
+    pub(crate) fn counting_stub(
+        answer: String,
+    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{Read, Write};
+        use std::sync::atomic::Ordering;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = hits.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                let mut buf = [0u8; 8192];
+                let _ = stream.read(&mut buf);
+                seen.fetch_add(1, Ordering::SeqCst);
+                let _ = stream.write_all(answer.as_bytes());
+            }
+        });
+        (url, hits)
+    }
+
+    /// The stubs close after each answer, so the client must not keep a connection for the next
+    /// hop, which on one host it otherwise would.
+    fn redirect_to(place: &str) -> String {
+        format!(
+            "HTTP/1.1 307 Temporary Redirect\r\nLocation: {place}\r\nConnection: close\r\n\
+             Content-Length: 0\r\n\r\n"
+        )
+    }
+
+    /// `write` with a bearer that needs no mint, and a keychain nothing here reaches.
+    fn write_to(url: &str) -> Result<Written, CliError> {
+        let mut session = crate::session::Session::with_bearer("user@example.com", "0", "dummy");
+        let creds = pk_cli_secrets::CredentialStore::new("piekstra.ghome-test-never-read");
+        let client = client_builder().build().unwrap();
+        Foyer::new(client, &mut session, &creds, false)
+            .write(url, &serde_json::json!([]), &|| Ok(()))
+    }
+
+    /// Google answered with the redirect and took no command, so this is not "may have worked".
+    #[test]
+    fn a_write_refused_a_redirect_off_its_host_is_a_failure() {
+        use std::sync::atomic::Ordering;
+        let (elsewhere, arrived) = counting_stub(
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 2\r\n\r\n[]".into(),
+        );
+        let (first, _) = counting_stub(redirect_to(&format!("{elsewhere}/x")));
+        let text = write_to(&first).unwrap_err().to_string();
+        assert!(text.contains("another host"), "{text}");
+        assert_eq!(arrived.load(Ordering::SeqCst), 0);
+    }
+
+    /// The policy refuses a hop off the host, not every hop.
+    #[test]
+    fn a_write_follows_a_redirect_on_its_own_host() {
+        use std::io::{Read, Write};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/first", listener.local_addr().unwrap());
+        let finals = std::sync::Arc::new(AtomicUsize::new(0));
+        let reached = finals.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                let mut buf = [0u8; 8192];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let answer = if buf[..n].starts_with(b"POST /first") {
+                    redirect_to("/second")
+                } else {
+                    reached.fetch_add(1, Ordering::SeqCst);
+                    "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 2\r\n\r\n[]"
+                        .to_string()
+                };
+                let _ = stream.write_all(answer.as_bytes());
+            }
+        });
+        assert!(matches!(write_to(&url), Ok(Written::Answered)));
+        assert_eq!(finals.load(Ordering::SeqCst), 1);
+    }
+
+    /// A 307 re-sends the body, and a form to Google's auth endpoint holds a master token.
+    #[test]
+    fn a_credential_in_a_body_does_not_follow_a_redirect_to_another_host() {
+        use std::sync::atomic::Ordering;
+        let (elsewhere, arrived) =
+            counting_stub("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".into());
+        let (first, _) = counting_stub(format!(
+            "HTTP/1.1 307 Temporary Redirect\r\nLocation: {elsewhere}/x\r\nContent-Length: 0\r\n\r\n"
+        ));
+        let sent = client_builder()
+            .build()
+            .unwrap()
+            .post(&first)
+            .form(&[("Token", "dummy")])
+            .send();
+        let text = CliError::from(sent.unwrap_err()).to_string();
+        assert!(text.contains("another host"), "{text}");
+        assert_eq!(arrived.load(Ordering::SeqCst), 0);
+    }
     use std::cell::{Cell, RefCell};
 
     /// `send_in_time` with a bearer that needs no keychain. What the sends got, for each answer.

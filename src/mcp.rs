@@ -17,13 +17,13 @@
 
 use std::cell::RefCell;
 use std::path::PathBuf;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::Duration;
 
 use pk_cli_config::ConfigStore;
 use pk_cli_core::CliError;
 use pk_cli_mcp::{
-    parse_args, ListArgs, Page, PageRequest, ResponseFormat, Server, ToolDef, ToolError,
-    ToolOutput, Toolset,
+    parse_args, Clock, ListArgs, Page, PageRequest, ResponseFormat, SendDeadline, Server,
+    SystemClock, ToolDef, ToolError, ToolOutput, Toolset,
 };
 use pk_cli_secrets::CredentialStore;
 use reqwest::blocking::Client;
@@ -63,22 +63,6 @@ const SEND_DEADLINE: Duration = Duration::from_secs(60);
 /// No read-back starts this long after the call began. One can take two requests, if its bearer
 /// was refused, and that and the wait before it still end inside the 120 s.
 const READ_BACK_DEADLINE: Duration = Duration::from_secs(85);
-
-/// When a call began, on both clocks. `Instant` stops while a Mac sleeps, so a keychain prompt
-/// answered the next morning would read as seconds later on it. The wall clock runs on, and one
-/// that moved backwards says nothing, which leaves the `Instant`.
-#[derive(Debug, Clone, Copy)]
-struct CallStart {
-    monotonic: Instant,
-    wall: SystemTime,
-}
-
-impl CallStart {
-    fn elapsed(&self, wall_now: SystemTime) -> Duration {
-        let wall = wall_now.duration_since(self.wall).unwrap_or_default();
-        self.monotonic.elapsed().max(wall)
-    }
-}
 
 /// Everything a tool can send to a device. Closed: volume, mute and media, which
 /// [`traits::Change`] also carries, are out of a tool's reach.
@@ -156,17 +140,9 @@ pub trait Source {
     /// A client with the config and the credential as they are now.
     fn open(&self) -> Result<Self::Api, CliError>;
     fn pause(&self, how_long: Duration);
-    /// How long after a call began its command may still go.
-    fn send_deadline(&self) -> Duration {
-        SEND_DEADLINE
-    }
-    /// How long after a call began a read-back may still start.
-    fn read_back_deadline(&self) -> Duration {
-        READ_BACK_DEADLINE
-    }
-    /// The time of day, for [`CallStart`].
-    fn wall_clock(&self) -> SystemTime {
-        SystemTime::now()
+    /// The clock a write's deadlines read.
+    fn clock(&self) -> &dyn Clock {
+        &SystemClock
     }
 }
 
@@ -263,7 +239,7 @@ impl Source for LiveSource {
         let creds = CredentialStore::for_binary(crate::BIN);
         let session = Session::for_config(&creds, &cfg)?;
         Ok(LivePlatform {
-            http: pk_cli_http::builder(crate::BIN, env!("CARGO_PKG_VERSION"))
+            http: foyer::client_builder()
                 .timeout(REQUEST_TIMEOUT)
                 .build()
                 .map_err(|e| CliError::Other(format!("failed to build HTTP client: {e}")))?,
@@ -684,16 +660,16 @@ impl<S: Source> GhomeTools<S> {
     /// Resolve one device by its full name or id, check it may and can take the change, send it,
     /// and read the result back.
     fn set_device(&self, query: &str, wanted: Wanted) -> Result<ToolOutput, ToolError> {
-        let started = self.started();
+        let deadline = SendDeadline::start(self.source.clock(), SEND_DEADLINE);
         let api = self.source.open().map_err(tool_err)?;
         let homes = api.homes().map_err(tool_err)?;
         let all = all_devices(&homes);
         let device = named_device(&all, query).map_err(tool_err)?;
         check_may_change(device, &wanted).map_err(tool_err)?;
         let sent = api
-            .update(&[device], &wanted, &|| self.check_in_time(started))
+            .update(&[device], &wanted, &|| deadline.check())
             .map_err(tool_err)?;
-        let read = self.read_back(&api, &homes, &[device], &wanted, started);
+        let read = self.read_back(&api, &homes, &[device], &wanted, deadline);
         let mut states = read.states;
         let device_state = states.pop().expect("one device was read");
         let confirmed = wanted.shown_by(&device_state);
@@ -715,7 +691,7 @@ impl<S: Source> GhomeTools<S> {
     /// The lights of one room named in full, and only those. A room is the one group a tool
     /// reaches: the name is the user's, and one call stops at its walls.
     fn set_room(&self, query: &str, wanted: Wanted) -> Result<ToolOutput, ToolError> {
-        let started = self.started();
+        let deadline = SendDeadline::start(self.source.clock(), SEND_DEADLINE);
         let api = self.source.open().map_err(tool_err)?;
         let homes = api.homes().map_err(tool_err)?;
         let (home, room) = named_room(&homes, query).map_err(tool_err)?;
@@ -735,9 +711,9 @@ impl<S: Source> GhomeTools<S> {
             ))));
         }
         let sent = api
-            .update(&targets, &wanted, &|| self.check_in_time(started))
+            .update(&targets, &wanted, &|| deadline.check())
             .map_err(tool_err)?;
-        let read = self.read_back(&api, &homes, &targets, &wanted, started);
+        let read = self.read_back(&api, &homes, &targets, &wanted, deadline);
         let lights: Vec<RoomLight> = read
             .states
             .into_iter()
@@ -762,26 +738,6 @@ impl<S: Source> GhomeTools<S> {
         })
     }
 
-    fn started(&self) -> CallStart {
-        CallStart {
-            monotonic: Instant::now(),
-            wall: self.source.wall_clock(),
-        }
-    }
-
-    fn check_in_time(&self, started: CallStart) -> Result<(), CliError> {
-        let deadline = self.source.send_deadline();
-        if started.elapsed(self.source.wall_clock()) < deadline {
-            return Ok(());
-        }
-        Err(CliError::Upstream(format!(
-            "nothing was sent: this call waited over {} s to reach the command, on a keychain \
-             prompt, a lock or a slow list, and its caller may have stopped waiting. Call it again \
-             if the change is still wanted.",
-            deadline.as_secs()
-        )))
-    }
-
     /// The state after a command, one for each device, in order. The command has gone: a failure
     /// here says so and is not a tool error, which a model would answer by sending it again.
     fn read_back(
@@ -790,14 +746,14 @@ impl<S: Source> GhomeTools<S> {
         homes: &[Home],
         devices: &[&Device],
         wanted: &Wanted,
-        started: CallStart,
+        deadline: SendDeadline<'_>,
     ) -> ReadBack {
         let ids: Vec<&str> = devices.iter().map(|d| d.id.as_str()).collect();
         let empty = json!({});
         let mut latest: Option<Map<String, Value>> = None;
         let mut failure = None;
         for wait in READ_BACK_WAITS {
-            if started.elapsed(self.source.wall_clock()) >= self.source.read_back_deadline() {
+            if deadline.elapsed() >= READ_BACK_DEADLINE {
                 failure.get_or_insert(CliError::Upstream(
                     "there was no time left to read it".into(),
                 ));

@@ -192,7 +192,9 @@ govee --json rooms devices | ghome audit --expect - --apply
 ghome api POST StructuresService/GetHomeGraph --data '[]'
 ```
 
-Bodies are positional protobuf arrays; see [docs/api.md](docs/api.md).
+Bodies are positional protobuf arrays; see [docs/api.md](docs/api.md). A full `https://` URL is also
+accepted. Plain `http://` is refused with exit 2, except to this machine, and the bearer never follows a
+redirect to another host.
 
 ## Use with Claude
 

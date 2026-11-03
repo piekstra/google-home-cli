@@ -122,13 +122,26 @@ fn failure(what: &str, fields: &BTreeMap<String, String>) -> CliError {
 }
 
 fn post(client: &Client, form: &[(String, String)]) -> Result<BTreeMap<String, String>, CliError> {
+    post_to(AUTH_URL, client, form)
+}
+
+fn post_to(
+    url: &str,
+    client: &Client,
+    form: &[(String, String)],
+) -> Result<BTreeMap<String, String>, CliError> {
     let resp = client
-        .post(AUTH_URL)
+        .post(url)
         .header(reqwest::header::USER_AGENT, "GoogleAuth/1.4")
         .header(reqwest::header::ACCEPT_ENCODING, "identity")
         .form(form)
         .send()
-        .map_err(|e| CliError::Upstream(format!("android auth endpoint: {}", e.without_url())))?;
+        .map_err(|e| {
+            if e.is_redirect() {
+                return CliError::from(e);
+            }
+            CliError::Upstream(format!("android auth endpoint: {}", e.without_url()))
+        })?;
     // The endpoint answers 403 for a rejected token but still carries the
     // `Error=` line, so read the body regardless of status.
     let body = resp.text().map_err(|e| {
@@ -196,6 +209,23 @@ pub fn new_android_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The form holds a master or oauth token, and a 307 would re-send it.
+    #[test]
+    fn a_token_form_refused_a_redirect_says_why_and_goes_no_further() {
+        use crate::foyer::tests::counting_stub;
+        use std::sync::atomic::Ordering;
+        let (elsewhere, arrived) =
+            counting_stub("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".into());
+        let (first, _) = counting_stub(format!(
+            "HTTP/1.1 307 Temporary Redirect\r\nLocation: {elsewhere}/x\r\nContent-Length: 0\r\n\r\n"
+        ));
+        let client = crate::foyer::client_builder().build().unwrap();
+        let form = [("Token".to_string(), "dummy".to_string())];
+        let text = post_to(&first, &client, &form).unwrap_err().to_string();
+        assert!(text.contains("another host"), "{text}");
+        assert_eq!(arrived.load(Ordering::SeqCst), 0);
+    }
 
     #[test]
     fn parses_key_value_lines_and_keeps_equals_in_values() {
