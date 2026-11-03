@@ -48,7 +48,7 @@
     },
     {
       "name": "ghome_device_state",
-      "description": "Whether a device is on, with its brightness and color, and how a speaker or lock reports."
+      "description": "Whether a device is on, with its brightness and color, and whether a lock is locked."
     },
     {
       "name": "ghome_device_set",

@@ -22,7 +22,7 @@ README's note.
 `ghome mcp` serves four tools to an MCP client (Claude Code, Claude Desktop) over stdio; the server opens no port
 unless run with `--http` (below). **What the tools return goes to Claude on every path**, as part of your
 conversation: your device and room names, each device's kind, whether it is online, what it reports about its
-power, brightness, color, volume, playback or lock, and with `response_format: "detailed"` its id, model and home's
+power, brightness, color or lock, and with `response_format: "detailed"` its id, model and home's
 name. `GetHomeGraph` also carries your home's address and coordinates, the email addresses of the people linked to
 it, each device's partner ids and its `local_auth_token`, and no tool returns them.
 

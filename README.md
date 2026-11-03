@@ -203,7 +203,7 @@ computer, in your copy of `ghome`, and call Google with your credential.
 | Tool | Does | Changes a device |
 | --- | --- | --- |
 | `ghome_devices` | What do I have? Name, kind, room, online and what the tools can change on it, narrowed by `name` and `room` | no |
-| `ghome_device_state` | Is it on? Online, power, brightness, color or color temperature, and how a speaker or a lock reports | no |
+| `ghome_device_state` | Is it on? Online, power, brightness, color or color temperature, and whether a lock is locked | no |
 | `ghome_device_set` | Set one light, plug or wall switch: `power`, `brightness`, `color` or `color_temp_k` | **yes** |
 | `ghome_room_lights` | Set the lights of one room, and nothing else in it | **yes** |
 
