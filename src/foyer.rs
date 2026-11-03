@@ -111,8 +111,8 @@ impl<'a> Foyer<'a> {
     }
 
     /// [`call`](Self::call) for a command that changes a device, for a caller that must not
-    /// send it twice. A connection that never opened sent nothing, and a refusal is a refusal,
-    /// and both stay errors. Any other failure may have come after Google took the command, so
+    /// send it twice. A connection that never opened sent nothing, a refusal is a refusal, and a
+    /// redirect this refused took no command, and all three stay errors. Any other failure may have come after Google took the command, so
     /// it is [`Written::NoAnswer`].
     ///
     /// `in_time` can stop it before each send: nothing goes out once it answers an error.
@@ -420,11 +420,13 @@ fn snippet(text: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// A server on 127.0.0.1 answering each request with `answer`, and how many arrived.
-    fn counting_stub(answer: String) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    pub(crate) fn counting_stub(
+        answer: String,
+    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
         use std::io::{Read, Write};
         use std::sync::atomic::Ordering;
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -441,6 +443,58 @@ mod tests {
             }
         });
         (url, hits)
+    }
+
+    fn redirect_to(place: &str) -> String {
+        format!("HTTP/1.1 307 Temporary Redirect\r\nLocation: {place}\r\nContent-Length: 0\r\n\r\n")
+    }
+
+    /// `write` with a bearer that needs no mint, and a keychain nothing here reaches.
+    fn write_to(url: &str) -> Result<Written, CliError> {
+        let mut session = crate::session::Session::with_bearer("user@example.com", "0", "dummy");
+        let creds = pk_cli_secrets::CredentialStore::new("piekstra.ghome-test-never-read");
+        let client = client_builder().build().unwrap();
+        Foyer::new(client, &mut session, &creds, false)
+            .write(url, &serde_json::json!([]), &|| Ok(()))
+    }
+
+    /// Google answered with the redirect and took no command, so this is not "may have worked".
+    #[test]
+    fn a_write_refused_a_redirect_off_its_host_is_a_failure() {
+        use std::sync::atomic::Ordering;
+        let (elsewhere, arrived) =
+            counting_stub("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n[]".into());
+        let (first, _) = counting_stub(redirect_to(&format!("{elsewhere}/x")));
+        let text = write_to(&first).unwrap_err().to_string();
+        assert!(text.contains("another host"), "{text}");
+        assert_eq!(arrived.load(Ordering::SeqCst), 0);
+    }
+
+    /// The policy refuses a hop off the host, not every hop.
+    #[test]
+    fn a_write_follows_a_redirect_on_its_own_host() {
+        use std::io::{Read, Write};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/first", listener.local_addr().unwrap());
+        let finals = std::sync::Arc::new(AtomicUsize::new(0));
+        let reached = finals.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                let mut buf = [0u8; 8192];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let answer = if buf[..n].starts_with(b"POST /first") {
+                    redirect_to("/second")
+                } else {
+                    reached.fetch_add(1, Ordering::SeqCst);
+                    "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n[]".to_string()
+                };
+                let _ = stream.write_all(answer.as_bytes());
+            }
+        });
+        assert!(matches!(write_to(&url), Ok(Written::Answered)));
+        assert_eq!(finals.load(Ordering::SeqCst), 1);
     }
 
     /// A 307 re-sends the body, and a form to Google's auth endpoint holds a master token.
