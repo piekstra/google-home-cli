@@ -71,6 +71,7 @@ gives it one again; plain `auth logout` removes the cached session and keeps the
 and keep serving, run `ghome mcp --new-token --overwrite` and restart the server (`launchctl kickstart -k gui/$(id
 -u)/com.piekstra.ghome-mcp-http`); the old token works until the restart. To stop serving, run `launchctl bootout gui/$(id
 -u)/com.piekstra.ghome-mcp-http` and stop the tunnel.
+A token supplied through `$GHOME_MCP_TOKEN` is not stored, so the logout cannot reach it: to end it, unset the variable and stop the server.
 
 ## Reporting
 
