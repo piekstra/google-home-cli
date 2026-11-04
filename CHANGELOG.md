@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.10.0 — 2026-11-04
+## 0.10.0 — 2026-11-04
 
 - Windows: releases attach `ghome-x86_64-pc-windows-msvc.tar.gz`, and the `.mcpb` runs there. A credential too long for one Windows credential item is split and read back as one.
 - `auth logout --forget` says what it does not end, naming `$GHOME_MCP_TOKEN`, and claims a removal only when there was an item.
