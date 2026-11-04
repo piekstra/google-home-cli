@@ -256,8 +256,7 @@ $ claude mcp add ghome -- ghome mcp
 **Claude Desktop.** Download `ghome-<version>.mcpb` from the
 [latest release](https://github.com/piekstra/google-home-cli/releases/latest) and open it. It has no settings:
 install the CLI and sign in first, and the bundled `ghome` reads the same keychain credential. A new version of
-the extension is a new program to the keychain and can ask again. macOS and Linux only;
-[`SECURITY.md`](SECURITY.md) says why there is no Windows build.
+the extension is a new program to the keychain and can ask again. It runs on macOS, Linux and Windows.
 
 Any other MCP client that launches a local server can run `ghome mcp`.
 

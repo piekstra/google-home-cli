@@ -50,8 +50,10 @@ not undone. On macOS a binary the keychain has not granted raises a prompt on a 
 waits on it. A write checks the time right before each send: 60 s or more after the call began, by the wall clock or by a
 clock that stops while a Mac sleeps, it sends nothing and says so, so a prompt answered late cannot switch a device. The Claude Desktop extension is such a binary, with a grant of its own.
 
-The extension and the release have no Windows build, because the credential and its cached bearer are one item,
-unmeasured against Windows's 2,560-byte credential limit, and an item too long for it would fail when it is written.
+The credential and its cached bearer are one item. If it is too long for one credential on Windows it is held in
+pieces: Windows limits an item to 2,560 bytes (1,280 UTF-16 units), and `pk-cli-secrets` splits a longer value and
+reads it back as one. A logout after a downgrade is repeated from a current build, since an older build's logout
+leaves the parts.
 
 `ghome mcp --http --port <PORT>` serves over HTTP for the user's own Cloudflare Worker, which reaches it through the
 user's own Cloudflare Tunnel (cli-common's `connector/`). It binds 127.0.0.1 only, with no flag for another address, and
@@ -69,6 +71,7 @@ gives it one again; plain `auth logout` removes the cached session and keeps the
 and keep serving, run `ghome mcp --new-token --overwrite` and restart the server (`launchctl kickstart -k gui/$(id
 -u)/com.piekstra.ghome-mcp-http`); the old token works until the restart. To stop serving, run `launchctl bootout gui/$(id
 -u)/com.piekstra.ghome-mcp-http` and stop the tunnel.
+A token supplied through `$GHOME_MCP_TOKEN` is not stored, so the logout cannot reach it: to end it, unset the variable and stop the server.
 
 ## Reporting
 

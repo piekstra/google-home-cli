@@ -85,7 +85,7 @@ or reaches `ghome api`, whatever the CLI can do. `GetHomeGraph` carries the addr
 15 s, no command goes out 60 s after the call began (`SEND_DEADLINE`, asked right before each send through `Foyer::write`,
 because a mint can wait on a keychain prompt), and no read-back starts after 85 s, so a write answers inside `--http`'s 120 s.
 
-This crate pins cli-common **v0.25.0**, the spec it conforms to.
+This crate pins cli-common **v0.29.0**, the spec it conforms to.
 
 ## Releasing
 
