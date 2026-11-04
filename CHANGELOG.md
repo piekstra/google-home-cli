@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.10.0 — 2026-11-04
+
+- Windows: releases attach `ghome-x86_64-pc-windows-msvc.tar.gz`, and the `.mcpb` runs there. A credential too long for one Windows credential item is split and read back as one.
+- `auth logout --forget` says what it does not end, naming `$GHOME_MCP_TOKEN`, and claims a removal only when there was an item.
+- cli-common v0.29.0, up from v0.25.0.
+
 ## 0.9.1 — 2026-11-03
 
 - **Security fix:** `ghome api` refuses a plain `http` URL off this machine with exit 2, before it reads

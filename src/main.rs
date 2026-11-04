@@ -401,30 +401,31 @@ fn auth(cli: &Cli, cmd: &AuthCmd, ctx: &Ctx) -> Result<(), CliError> {
                     ))
                 }
             }
+            let mut token_removed = None;
             if args.forget {
                 // Nothing records whether `mcp --new-token` ran, so this delete is ungated: a
                 // keyring that is not running, or a prompt declined, must not leave the config
                 // behind it.
                 let token = creds.delete(pk_cli_mcp::HTTP_TOKEN_ACCOUNT);
                 ctx.store.clear()?;
-                token.map_err(|failure| {
+                token_removed = Some(token.map_err(|failure| {
                     CliError::Keychain(format!(
                         "the credential and config are cleared, but the connector token of \
                          `ghome mcp --http` could not be removed, if there is one: {failure}"
                     ))
-                })?;
+                })?);
             }
             if !cli.common.quiet {
-                if args.forget {
+                if let Some(removed) = token_removed {
                     eprintln!(
-                        "{}; any connector token removed from the keychain (a running `ghome mcp \
-                         --http` keeps its own until it stops); config cleared",
+                        "{}; config cleared",
                         if had_account {
                             "logged out"
                         } else {
                             "nothing to log out of"
                         }
                     );
+                    eprintln!("{}", pk_cli_mcp::forget_note(BIN, removed));
                 } else {
                     eprintln!("logged out");
                 }
