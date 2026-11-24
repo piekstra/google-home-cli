@@ -16,7 +16,7 @@
   "homepage": "https://github.com/piekstra/google-home-cli",
   "documentation": "https://github.com/piekstra/google-home-cli#use-with-claude",
   "support": "https://github.com/piekstra/google-home-cli/issues",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "keywords": [
     "google-home",
     "smart-home",
