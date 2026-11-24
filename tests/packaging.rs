@@ -102,5 +102,5 @@ fn every_platform_runs_mcp_with_no_credential_in_its_config() {
     assert!(text.contains("ghome auth login"), "{text}");
     assert!(text.contains("goes to Claude"), "{text}");
     assert!(text.contains("asks you"), "{text}");
-    assert_eq!(m["license"], "MIT");
+    assert_eq!(m["license"], "AGPL-3.0-only");
 }
